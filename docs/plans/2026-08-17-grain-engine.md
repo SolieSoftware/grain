@@ -1965,19 +1965,22 @@ def _edge_onclause(metadata: MetaData, edge: Edge) -> ColumnElement[bool]:
     )
 
 
-def _apply_object_joins(stmt: Select, metadata: MetaData, rq: ResolvedQuery) -> Select:
-    """Tables an object spans are always outer-joined — an inner join to `genre`
-    would silently drop every track without one."""
-    for obj in [rq.root, *[e.to_object for e in rq.path]]:
-        for join in obj.joins.values():
-            onclause = and_(
-                *[
-                    _column(metadata, p.from_.table, p.from_.column)
-                    == _column(metadata, p.to.table, p.to.column)
-                    for p in join.on
-                ]
-            )
-            stmt = stmt.join(metadata.tables[join.to], onclause, isouter=(join.kind == "left"))
+def _apply_object_joins(stmt: Select, metadata: MetaData, obj) -> Select:
+    """Join the extra tables ONE object spans. Always outer — an inner join to
+    `genre` would silently drop every track without one.
+
+    Call this for an object only once that object is itself in scope, or the
+    extra tables reference a FROM element that does not exist yet.
+    """
+    for join in obj.joins.values():
+        onclause = and_(
+            *[
+                _column(metadata, p.from_.table, p.from_.column)
+                == _column(metadata, p.to.table, p.to.column)
+                for p in join.on
+            ]
+        )
+        stmt = stmt.join(metadata.tables[join.to], onclause, isouter=(join.kind == "left"))
     return stmt
 
 
@@ -1986,13 +1989,14 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
         _property_column(metadata, rp).label(rp.name) for rp in rq.group_by
     ]
     stmt = select(*group_cols).select_from(metadata.tables[rq.root.primary])
-    stmt = _apply_object_joins(stmt, metadata, rq)
+    stmt = _apply_object_joins(stmt, metadata, rq.root)
 
     for edge in rq.path:
         if edge.link.kind == "direct":
             stmt = stmt.join(
                 metadata.tables[edge.to_object.primary], _edge_onclause(metadata, edge)
             )
+        stmt = _apply_object_joins(stmt, metadata, edge.to_object)
 
     clauses = [_filter_clause(metadata, rf) for rf in rq.filters]
     if clauses:
@@ -2087,7 +2091,24 @@ def _resolve_filter(spec_filter, root: ObjectType, onto: Ontology) -> ResolvedFi
 
 Add `hops: list[LinkType] = field(default_factory=list)` to `ResolvedFilter` (change it from `frozen=True` to a plain `@dataclass`), and call `_resolve_filter` for each spec filter.
 
-In `compile.py`, handle `through` links inside the path loop:
+In `compile.py`, extract the path loop into a **shared helper** — Task 13's metric
+subquery must apply exactly the same joins, and a second direct-only copy of this
+loop would silently drop `through` and `recursive` edges from rewritten metrics:
+
+```python
+def _apply_path(stmt: Select, metadata: MetaData, rq: ResolvedQuery) -> Select:
+    """Apply every edge on the walked path, plus each target's object joins.
+
+    Task 13's aggregate-then-join subquery calls this too — one definition, so a
+    metric behind a `through` link cannot end up with a subquery missing joins.
+    """
+    for edge in rq.path:
+        stmt = _apply_edge(stmt, metadata, edge)
+        stmt = _apply_object_joins(stmt, metadata, edge.to_object)
+    return stmt
+```
+
+with `_apply_edge` handling all three kinds. Handle `through` links inside it:
 
 ```python
         elif edge.link.kind == "through":
@@ -2257,7 +2278,13 @@ In the path loop:
 ```python
         elif edge.link.kind == "recursive":
             cte = _recursive_cte(metadata, edge)
-            stmt = stmt.join(cte, _edge_onclause(metadata, edge))
+            # C5: join against the CTE's own columns, not the base table's —
+            # _edge_onclause would compare the base table to itself.
+            pair = edge.link.on[0]
+            stmt = stmt.join(
+                cte,
+                _column(metadata, pair.to.table, pair.to.column) == cte.c[pair.to.column],
+            )
 ```
 
 - [ ] **Step 4: Run and confirm they pass**
@@ -2401,10 +2428,9 @@ def _aggregate_then_join(
     keys = [_property_column(metadata, rp).label(rp.name) for rp in rq.group_by]
     sub = select(*keys, _metric_expr(mp.metric).label(mp.metric.name))
     sub = sub.select_from(metadata.tables[rq.root.primary])
-    for edge in rq.path:
-        if edge.link.kind == "direct":
-            sub = sub.join(metadata.tables[edge.to_object.primary],
-                           _edge_onclause(metadata, edge))
+    sub = _apply_object_joins(sub, metadata, rq.root)
+    sub = _apply_path(sub, metadata, rq)   # C2: same joins as the outer query —
+                                           # never a direct-only copy of the loop
     sub = sub.group_by(*[_property_column(metadata, rp) for rp in rq.group_by]).subquery()
 
     onclause = and_(
@@ -2425,6 +2451,32 @@ Then in `compile_query`, after applying joins and filters:
     for mp in rewritten:
         stmt = _aggregate_then_join(stmt, metadata, rq, mp)
 ```
+
+**C3 — SQLAlchemy 2 rejects an empty `select()`.** Verified against 2.0.52:
+`select().select_from(t).add_columns(...)` raises `NotImplementedError`. So
+`compile_query` must never call `select()` with zero columns. Restructure the
+opening of `compile_query` to assemble the full column list first:
+
+```python
+    group_cols = [_property_column(metadata, rp).label(rp.name) for rp in rq.group_by]
+    inline_cols = [
+        _metric_expr(mp.metric).label(mp.metric.name)
+        for mp in plan.metric_plans if mp.strategy == "inline"
+    ]
+    if not group_cols and not inline_cols:
+        # Only rewritten metrics and no keys to join them back on: there is no
+        # correct query to emit, so refuse rather than guess.
+        first = next(mp for mp in plan.metric_plans if mp.strategy == "aggregate_then_join")
+        raise FanOutRefused(
+            first.metric.name, first.metric.grain, first.forced_by or "<path>",
+            [f"add a group_by key, or choose a metric at {rq.root.primary} grain"],
+        )
+    stmt = select(*group_cols, *inline_cols).select_from(metadata.tables[rq.root.primary])
+```
+
+`_inline_metrics` is then no longer needed as a separate step — the inline columns
+are already in the `select()`. Delete it and keep only the `_aggregate_then_join`
+loop. Import `FanOutRefused` from `.errors`.
 
 Import `text` and `func` from `sqlalchemy`, and `MetricPlan` from `.grain`.
 
@@ -2871,6 +2923,8 @@ def _imports(path: pathlib.Path) -> set[str]:
 
 @pytest.mark.parametrize("path", sorted(ENGINE.glob("*.py")))
 def test_engine_never_imports_a_domain(path):
+    if path.stem in ADAPTERS:
+        return  # adapters may name a default domain; the engine core may not
     assert not any("domains" in imp for imp in _imports(path)), (
         f"{path.name} imports a domain module — domain packs are located by path, "
         f"never imported by name."
@@ -2990,7 +3044,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 ```
 
-Note: the CLI resolves the default domain by importing `grain.domains.chinook` **inside the function**, so the module-level boundary test still passes. This is a deliberate seam, not an accident — record it in the module docstring if you move it.
+Note: the CLI names `grain.domains.chinook` as its default domain. That is legitimate — an adapter may pick a default; the **engine core** may not. The boundary test exempts `cli` and `server` for exactly this reason, and enforces the rule strictly everywhere else. The import stays function-scoped so importing the module never drags a domain in.
 
 - [ ] **Step 4: Implement the MCP server**
 
