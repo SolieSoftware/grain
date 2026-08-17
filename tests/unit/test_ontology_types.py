@@ -11,6 +11,10 @@ def test_column_ref_rejects_undotted_name():
     with pytest.raises(ValueError):
         ColumnRef.parse("album_id")
 
+def test_column_ref_rejects_a_non_string():
+    with pytest.raises(ValueError):
+        ColumnRef.parse(123)
+
 def test_fans_out_is_true_only_for_multiplying_cardinalities():
     def link(card):
         return LinkType(
@@ -34,6 +38,18 @@ def test_through_link_requires_via():
 def test_direct_link_requires_on():
     with pytest.raises(ValidationError):
         LinkType(name="L", **{"from": "A"}, to="B", kind="direct", cardinality="many_to_one")
+
+def test_recursive_link_requires_on():
+    with pytest.raises(ValidationError):
+        LinkType(name="L", **{"from": "Employee"}, to="Employee", kind="recursive",
+                 cardinality="many_to_one")
+
+def test_link_constructs_by_alias_and_by_field_name():
+    """The YAML loader passes `from`; Python callers pass `from_`. Both must work."""
+    common = dict(name="L", to="B", kind="direct", cardinality="many_to_one",
+                  on=[{"from": "a.b_id", "to": "b.id"}])
+    assert LinkType(**{"from": "A"}, **common).from_ == "A"
+    assert LinkType(from_="A", **common).from_ == "A"
 
 def test_links_from_returns_only_outbound_links():
     onto = Ontology(

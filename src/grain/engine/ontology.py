@@ -24,6 +24,8 @@ class ColumnRef(BaseModel):
             return value
         if isinstance(value, dict):
             return cls(**value)
+        if not isinstance(value, str):
+            raise ValueError(f"Column reference must be 'table.column', got '{value}'")
         table, sep, column = value.partition(".")
         if not sep or not table or not column:
             raise ValueError(f"Column reference must be 'table.column', got '{value}'")
