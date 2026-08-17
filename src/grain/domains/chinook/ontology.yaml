@@ -1,0 +1,193 @@
+name: chinook
+description: A digital music store — artists, tracks, playlists, customers, invoices.
+
+objects:
+  Artist:
+    primary: artist
+    title_property: name
+    properties:
+      name: {column: artist.name, type: string}
+
+  Album:
+    primary: album
+    title_property: title
+    properties:
+      title: {column: album.title, type: string}
+
+  Track:
+    primary: track
+    title_property: name
+    description: A purchasable audio track.
+    joins:
+      genre:
+        to: genre
+        kind: left
+        on: [{from: track.genre_id, to: genre.genre_id}]
+      media_type:
+        to: media_type
+        kind: left
+        on: [{from: track.media_type_id, to: media_type.media_type_id}]
+    properties:
+      name: {column: track.name, type: string}
+      composer: {column: track.composer, type: string, nullable: true}
+      duration_ms: {column: track.milliseconds, type: integer}
+      unit_price: {column: track.unit_price, type: decimal}
+      genre: {column: genre.name, type: string, via: genre, nullable: true}
+      media_type: {column: media_type.name, type: string, via: media_type, nullable: true}
+
+  Genre:
+    primary: genre
+    title_property: name
+    properties:
+      name: {column: genre.name, type: string}
+
+  MediaType:
+    primary: media_type
+    title_property: name
+    properties:
+      name: {column: media_type.name, type: string}
+
+  Playlist:
+    primary: playlist
+    title_property: name
+    properties:
+      name: {column: playlist.name, type: string}
+
+  Customer:
+    primary: customer
+    title_property: last_name
+    properties:
+      first_name: {column: customer.first_name, type: string}
+      last_name: {column: customer.last_name, type: string}
+      country: {column: customer.country, type: string, nullable: true}
+      city: {column: customer.city, type: string, nullable: true}
+      email: {column: customer.email, type: string}
+
+  Invoice:
+    primary: invoice
+    properties:
+      invoice_date: {column: invoice.invoice_date, type: datetime}
+      billing_country: {column: invoice.billing_country, type: string, nullable: true}
+      total: {column: invoice.total, type: decimal}
+
+  InvoiceLine:
+    primary: invoice_line
+    properties:
+      unit_price: {column: invoice_line.unit_price, type: decimal}
+      quantity: {column: invoice_line.quantity, type: integer}
+
+  Employee:
+    primary: employee
+    title_property: last_name
+    properties:
+      first_name: {column: employee.first_name, type: string}
+      last_name: {column: employee.last_name, type: string}
+      title: {column: employee.title, type: string, nullable: true}
+
+links:
+  Artist_Albums:
+    from: Artist
+    to: Album
+    kind: direct
+    on: [{from: artist.artist_id, to: album.artist_id}]
+    cardinality: one_to_many
+
+  Album_Tracks:
+    from: Album
+    to: Track
+    kind: direct
+    on: [{from: album.album_id, to: track.album_id}]
+    cardinality: one_to_many
+
+  Track_Album:
+    from: Track
+    to: Album
+    kind: direct
+    on: [{from: track.album_id, to: album.album_id}]
+    cardinality: many_to_one
+    inverse_of: Album_Tracks
+
+  Playlist_Tracks:
+    from: Playlist
+    to: Track
+    kind: through
+    via: playlist_track
+    on_from: [{from: playlist.playlist_id, to: playlist_track.playlist_id}]
+    on_to: [{from: playlist_track.track_id, to: track.track_id}]
+    cardinality: many_to_many
+
+  Track_InvoiceLines:
+    from: Track
+    to: InvoiceLine
+    kind: direct
+    on: [{from: track.track_id, to: invoice_line.track_id}]
+    cardinality: one_to_many
+
+  Customer_Invoices:
+    from: Customer
+    to: Invoice
+    kind: direct
+    on: [{from: customer.customer_id, to: invoice.customer_id}]
+    cardinality: one_to_many
+
+  Invoice_Lines:
+    from: Invoice
+    to: InvoiceLine
+    kind: direct
+    on: [{from: invoice.invoice_id, to: invoice_line.invoice_id}]
+    cardinality: one_to_many
+
+  Customer_SupportRep:
+    from: Customer
+    to: Employee
+    kind: direct
+    on: [{from: customer.support_rep_id, to: employee.employee_id}]
+    cardinality: many_to_one
+    description: The sales rep assigned to this customer.
+
+  Employee_Manager:
+    from: Employee
+    to: Employee
+    kind: recursive
+    on: [{from: employee.reports_to, to: employee.employee_id}]
+    cardinality: many_to_one
+    max_depth: 10
+
+metrics:
+  revenue:
+    grain: invoice_line
+    expr: "sum(invoice_line.unit_price * invoice_line.quantity)"
+    type: decimal
+    description: Money actually taken, at line grain. The correct revenue figure.
+    ai_context:
+      synonyms: [revenue, sales, turnover, money taken, total sales]
+      instructions: >
+        Default choice for any revenue question. Prefer this over invoice_total
+        unless the question is explicitly about invoice headers.
+
+  invoice_total:
+    grain: invoice
+    expr: "sum(invoice.total)"
+    type: decimal
+    description: >
+      Invoice header totals. Equals revenue only when evaluated at invoice grain.
+    ai_context:
+      synonyms: [invoice total, billed amount, header total]
+      instructions: >
+        Only for questions about invoices as documents. Not the default revenue
+        metric — see revenue.
+
+  units_sold:
+    grain: invoice_line
+    expr: "sum(invoice_line.quantity)"
+    type: integer
+
+  track_count:
+    grain: track
+    expr: "count(distinct track.track_id)"
+    type: integer
+
+  customer_count:
+    grain: customer
+    expr: "count(distinct customer.customer_id)"
+    type: integer
