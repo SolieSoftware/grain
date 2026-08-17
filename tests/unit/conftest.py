@@ -22,6 +22,14 @@ objects:
     primary: employee
     properties:
       last_name: {column: employee.last_name, type: string}
+  Track:
+    primary: track
+    properties:
+      name: {column: track.name, type: string}
+  Playlist:
+    primary: playlist
+    properties:
+      name: {column: playlist.name, type: string}
 links:
   Customer_Invoices:
     from: Customer
@@ -48,6 +56,20 @@ links:
     on: [{from: employee.reports_to, to: employee.employee_id}]
     cardinality: many_to_one
     max_depth: 10
+  Track_InvoiceLines:
+    from: Track
+    to: InvoiceLine
+    kind: direct
+    on: [{from: track.track_id, to: invoice_line.track_id}]
+    cardinality: one_to_many
+  Playlist_Tracks:
+    from: Playlist
+    to: Track
+    kind: through
+    via: playlist_track
+    on_from: [{from: playlist.playlist_id, to: playlist_track.playlist_id}]
+    on_to: [{from: playlist_track.track_id, to: track.track_id}]
+    cardinality: many_to_many
 metrics:
   revenue:
     grain: invoice_line
@@ -60,6 +82,10 @@ metrics:
   customer_count:
     grain: customer
     expr: "count(distinct customer.customer_id)"
+    type: integer
+  track_count:
+    grain: track
+    expr: "count(distinct track.track_id)"
     type: integer
 """
 
@@ -89,6 +115,7 @@ def lite_metadata():
         Column("invoice_id", Integer),
         Column("unit_price", Numeric),
         Column("quantity", Integer),
+        Column("track_id", Integer),
     )
     Table(
         "employee",
@@ -97,6 +124,10 @@ def lite_metadata():
         Column("reports_to", Integer),
         Column("last_name", String),
     )
+    Table("track", md, Column("track_id", Integer), Column("name", String),
+          Column("album_id", Integer))
+    Table("playlist", md, Column("playlist_id", Integer), Column("name", String))
+    Table("playlist_track", md, Column("playlist_id", Integer), Column("track_id", Integer))
     return md
 
 

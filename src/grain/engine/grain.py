@@ -125,4 +125,19 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
                 )
             )
 
+        # Additivity is orthogonal to strategy and to fan-out: it asks whether
+        # the *group-by keys* (which live on the root) overlap, not whether
+        # this metric's own rows would double-count. A many_to_many anywhere
+        # on the path from the grain back to the root — `prefix` — means the
+        # same grain row can belong to more than one group, so the column
+        # will not sum to the total even though every group is correct.
+        for edge in prefix:
+            if edge.link.cardinality == "many_to_many" and plan.additive:
+                plan.additive = False
+                plan.non_additive_reason = (
+                    f"'{metric.name}' is grouped across '{edge.link.name}', which is "
+                    f"many_to_many. Each group is correct, but the groups overlap — "
+                    f"this column will not sum to the total."
+                )
+
     return plan
