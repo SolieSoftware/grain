@@ -41,18 +41,44 @@ class AmbiguousPath(GrainError):
         self.from_object, self.to_object = from_object, to_object
 
 
+NOT_ON_PATH = "<not on path>"
+"""Sentinel `offending_edge`: the grain is unreachable, so no edge is at fault."""
+
+
 class FanOutRefused(GrainError):
     def __init__(
-        self, metric: str, grain: str, offending_edge: str, alternatives: list[str]
+        self,
+        metric: str,
+        grain: str,
+        offending_edge: str,
+        alternatives: list[str],
+        reachable_via: list[str] | None = None,
     ) -> None:
         hint = f" Alternatives: {', '.join(alternatives)}." if alternatives else ""
-        super().__init__(
-            f"Metric '{metric}' has grain '{grain}', but the query path fans out "
-            f"through '{offending_edge}'. Summing it here would multiply each "
-            f"'{grain}' row by its child count.{hint}",
-            alternatives,
-        )
+        if offending_edge == NOT_ON_PATH:
+            # Nothing fanned out — the grain never enters scope at all, so the
+            # repair is to extend the traversal, not to aggregate differently.
+            reach = (
+                f" Bring it into scope: {', '.join(reachable_via)}."
+                if reachable_via
+                else ""
+            )
+            # When `alternatives` fell back to the repairs there is nothing to
+            # add — saying the same thing twice reads as two different offers.
+            echo = "" if alternatives == (reachable_via or []) else hint
+            message = (
+                f"Metric '{metric}' has grain '{grain}', which is not reachable "
+                f"along the declared traversal.{reach}{echo}"
+            )
+        else:
+            message = (
+                f"Metric '{metric}' has grain '{grain}', but the query path fans out "
+                f"through '{offending_edge}'. Summing it here would multiply each "
+                f"'{grain}' row by its child count.{hint}"
+            )
+        super().__init__(message, alternatives)
         self.metric, self.grain, self.offending_edge = metric, grain, offending_edge
+        self.reachable_via: list[str] = reachable_via or []
 
 
 class GuardTripped(GrainError):

@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-from .errors import FanOutRefused
+from .errors import NOT_ON_PATH, FanOutRefused
 from .ontology import Metric
 from .resolve import Edge, ResolvedQuery
 
@@ -51,20 +51,69 @@ def _in_scope_metric_names(rq: ResolvedQuery) -> list[str]:
     )
 
 
+def _hops_reaching(rq: ResolvedQuery, table: str) -> list[str]:
+    """First hops of a declared route that would bring `table` into scope.
+
+    A breadth-first walk of the declared links outward from every in-scope
+    object, reporting the hop the caller would have to add first. Reads only
+    what the links say — no rows are consulted to decide reachability.
+    """
+    onto = rq.ontology
+    starts = {rq.root.name} | {edge.to_object.name for edge in rq.path}
+    reaching: set[str] = set()
+    for first in onto.links.values():
+        if first.from_ not in starts:
+            continue
+        seen = {first.from_}
+        frontier = [first]
+        while frontier:
+            link = frontier.pop(0)
+            target = onto.objects.get(link.to)
+            if target is None or link.to in seen:
+                continue
+            if table in target.tables or table == link.via:
+                reaching.add(first.name)
+                break
+            seen.add(link.to)
+            frontier.extend(onto.links_from(link.to))
+    return sorted(reaching)
+
+
+def _repairs_for(rq: ResolvedQuery, grain: str) -> list[str]:
+    """Legal next moves when no metric at all is answerable in this scope.
+
+    An error that only says 'no' costs the caller a turn and teaches it nothing,
+    so this must not come back empty while any move exists.
+    """
+    repairs = [f"add the {name} hop" for name in _hops_reaching(rq, grain)]
+    owner = rq.ontology.object_for_table(grain)
+    if owner is not None and owner.name != rq.root.name:
+        repairs.append(f"query {owner.name} instead")
+    repairs += [f"remove the {edge.link.name} hop" for edge in rq.fanning_edges]
+    return repairs
+
+
 def analyse(rq: ResolvedQuery) -> GrainPlan:
     plan = GrainPlan()
 
     for metric in rq.metrics:
         prefix = path_to_table(rq, metric.grain)
         if prefix is None:
+            repairs = _repairs_for(rq, metric.grain)
+            in_scope = _in_scope_metric_names(rq)
             raise FanOutRefused(
                 metric.name,
                 metric.grain,
-                "<not on path>",
-                _in_scope_metric_names(rq),
+                NOT_ON_PATH,
+                in_scope or repairs,
+                reachable_via=repairs,
             )
 
-        fanning = [e for e in prefix if e.link.fans_out]
+        # Edges traversed AFTER the grain enters scope are what replicate its
+        # rows. Edges before it replicate the grain's ancestors, which leaves
+        # this metric's own rows intact and so is harmless for it.
+        downstream = rq.path[len(prefix):]
+        fanning = [e for e in downstream if e.link.fans_out]
         if not fanning:
             plan.metric_plans.append(MetricPlan(metric=metric, strategy="inline"))
         else:
