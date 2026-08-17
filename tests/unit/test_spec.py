@@ -29,3 +29,18 @@ def test_spec_rejects_unknown_fields():
 def test_hop_carries_optional_depth():
     assert Hop(link="Employee_Manager", max_depth=3).max_depth == 3
     assert Hop(link="Customer_Invoices").max_depth is None
+
+def test_in_requires_a_sequence_not_a_bare_string():
+    """Without this, a bare string reaches SQLAlchemy and raises ArgumentError
+    from inside the compiler — an untyped error the agent cannot act on."""
+    with pytest.raises(ValidationError):
+        Filter(property="country", op="in", value="Brazil")
+
+def test_in_accepts_a_list():
+    assert Filter(property="country", op="in", value=["Brazil", "France"]).value == [
+        "Brazil", "France"
+    ]
+
+def test_is_null_rejects_a_stray_value():
+    with pytest.raises(ValidationError):
+        Filter(property="composer", op="is_null", value="ignored")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 FilterOp = Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "like", "is_null"]
 
@@ -16,6 +16,17 @@ class Filter(BaseModel):
     property: str
     op: FilterOp
     value: Any = None
+
+    @model_validator(mode="after")
+    def _check_value_matches_op(self) -> "Filter":
+        """`in` needs a sequence; `is_null` takes no value. Catching this here
+        keeps the failure a typed validation error at the door, instead of a
+        SQLAlchemy ArgumentError surfacing from deep inside the compiler."""
+        if self.op == "in" and not isinstance(self.value, (list, tuple)):
+            raise ValueError("op 'in' requires a list or tuple of values")
+        if self.op == "is_null" and self.value is not None:
+            raise ValueError("op 'is_null' takes no value")
+        return self
 
 
 class Hop(BaseModel):
