@@ -16,6 +16,10 @@ from .ontology import ColumnRef, Metric, Ontology
 METRIC_COLUMN_TOKEN = re.compile(r"\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b")
 
 
+# Exists solely so the `on:` join-condition key survives parsing as a string,
+# not a boolean -- see the class docstring. Do not swap this back to
+# `yaml.safe_load`/`yaml.SafeLoader`: `test_bare_on_key_is_not_parsed_as_a_boolean`
+# in tests/unit/test_loader.py is the regression guard for exactly that.
 class _OntologyLoader(yaml.SafeLoader):
     """SafeLoader, but scoped to the YAML 1.2 core-schema notion of bool.
 
@@ -116,18 +120,11 @@ def validate(onto: Ontology, metadata: MetaData) -> None:
     for link in onto.links.values():
         ctx = f"link '{link.name}'"
         for side in (link.from_, link.to):
-            if side in onto.objects:
-                continue
-            # Not every link endpoint needs a full ObjectType declaration (no
-            # properties, no joins) -- but it must still name something real:
-            # a table it could stand for, by its lower-cased name. A name that
-            # matches neither a declared object nor a table is a typo.
-            if side.lower() in metadata.tables:
-                continue
-            raise OntologyError(
-                f"{ctx}: '{side}' is not a declared object and does not match any "
-                f"table in the database. Declared objects: {sorted(onto.objects)}"
-            )
+            if side not in onto.objects:
+                raise OntologyError(
+                    f"{ctx}: '{side}' is not a declared object. "
+                    f"Declared objects: {sorted(onto.objects)}"
+                )
         if link.via is not None:
             _require_table(metadata, link.via, ctx)
         for pair in [*link.on, *link.on_from, *link.on_to]:

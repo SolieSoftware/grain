@@ -24,6 +24,10 @@ objects:
     primary: customer
     properties:
       country: {column: customer.country, type: string}
+  Invoice:
+    primary: invoice
+    properties:
+      total: {column: invoice.total, type: decimal}
 links:
   Customer_Invoices:
     from: Customer
@@ -71,3 +75,14 @@ def test_link_naming_an_undeclared_object_is_rejected(metadata):
     bad = GOOD.replace("to: Invoice", "to: Invoicee")
     with pytest.raises(OntologyError, match="Invoicee"):
         load_ontology_from_string(bad, metadata)
+
+
+def test_bare_on_key_is_not_parsed_as_a_boolean(metadata):
+    """YAML 1.1 resolves bare `on` to True. The whole join-condition schema is
+    keyed on `on:`, so this must stay a string or links silently lose their
+    conditions. Regression guard: do not swap in yaml.safe_load."""
+    onto = load_ontology_from_string(GOOD, metadata)
+    link = onto.links["Customer_Invoices"]
+    assert len(link.on) == 1
+    assert link.on[0].from_.qualified == "customer.customer_id"
+    assert link.on[0].to.qualified == "invoice.customer_id"
