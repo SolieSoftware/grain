@@ -1,0 +1,997 @@
+<title>grain Architecture</title>
+<style>
+  :root{
+    --ground:#F4F5F6; --surface:#FFFFFF; --surface-2:#EAEDEF; --surface-3:#E1E5E9;
+    --ink:#14181D; --ink-2:#56606C; --line:#D3D8DE; --line-2:#BFC6CE;
+    --accent:#B27A16; --accent-soft:#F6E9CC; --accent-line:#D9A94A;
+    --ok:#2C7355; --ok-soft:#DDEDE5;
+    --bad:#A5322A; --bad-soft:#F6E0DD;
+    --mono:ui-monospace,"JetBrains Mono","SF Mono","Cascadia Mono","Roboto Mono",Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0F1216; --surface:#161A1F; --surface-2:#1D232A; --surface-3:#252D35;
+      --ink:#E7EBEF; --ink-2:#97A2AE; --line:#2B323A; --line-2:#3A434D;
+      --accent:#E0A94A; --accent-soft:#33280F; --accent-line:#8A6A24;
+      --ok:#57A882; --ok-soft:#16281F;
+      --bad:#E0705F; --bad-soft:#2E1A17;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0F1216; --surface:#161A1F; --surface-2:#1D232A; --surface-3:#252D35;
+    --ink:#E7EBEF; --ink-2:#97A2AE; --line:#2B323A; --line-2:#3A434D;
+    --accent:#E0A94A; --accent-soft:#33280F; --accent-line:#8A6A24;
+    --ok:#57A882; --ok-soft:#16281F;
+    --bad:#E0705F; --bad-soft:#2E1A17;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.65;
+    margin:0; padding:0 20px 96px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;display:flex;flex-direction:column;gap:0}
+  .prose{max-width:66ch}
+
+  /* ── masthead ─────────────────────────────── */
+  header{padding:64px 0 32px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono); font-size:.6875rem; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--ink-2); margin:0 0 18px;
+  }
+  h1{
+    font-family:var(--mono); font-weight:700; letter-spacing:-.035em;
+    font-size:clamp(2.1rem,5.5vw,3.1rem); line-height:1.04;
+    margin:0 0 18px; text-wrap:balance;
+  }
+  h1 .lede{color:var(--accent)}
+  .standfirst{margin:0;max-width:60ch;color:var(--ink-2);font-size:1.0625rem}
+
+  .facts{
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+    gap:1px; background:var(--line); border:1px solid var(--line);
+    margin:32px 0 0;
+  }
+  .fact{background:var(--surface);padding:14px 16px}
+  .fact dt{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--ink-2);margin:0 0 5px;
+  }
+  .fact dd{margin:0;font-family:var(--mono);font-size:.8125rem;font-variant-numeric:tabular-nums}
+  .fact dd.on{color:var(--ok)}
+  .fact dd.off{color:var(--ink-2)}
+
+  /* ── sections ─────────────────────────────── */
+  section{padding:52px 0 8px;border-bottom:1px solid var(--line)}
+  section:last-of-type{border-bottom:none}
+  h2{
+    font-family:var(--mono);font-weight:700;letter-spacing:-.02em;
+    font-size:1.3125rem;margin:0 0 6px;text-wrap:balance;
+  }
+  h2 .num{color:var(--accent);margin-right:.6em;font-weight:500}
+  .sub{
+    font-family:var(--mono);font-size:.6875rem;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--ink-2);margin:0 0 22px;
+  }
+  p{margin:0 0 16px}
+  strong{font-weight:650}
+  code{
+    font-family:var(--mono);font-size:.875em;
+    background:var(--surface-2);padding:.12em .38em;border-radius:2px;
+  }
+
+  /* ── figures ──────────────────────────────── */
+  figure{margin:28px 0 8px;display:flex;flex-direction:column;gap:12px}
+  .scroll{overflow-x:auto;background:var(--surface);border:1px solid var(--line);padding:22px}
+  svg{display:block;max-width:100%;height:auto;min-width:640px}
+  figcaption{
+    font-size:.875rem;color:var(--ink-2);max-width:70ch;
+    padding-left:12px;border-left:2px solid var(--accent-line);
+  }
+
+  svg text{font-family:var(--mono);fill:var(--ink)}
+  .box{fill:var(--surface);stroke:var(--line-2);stroke-width:1.5}
+  .box-2{fill:var(--surface-2);stroke:var(--line-2);stroke-width:1.5}
+  .box-3{fill:var(--surface-3);stroke:var(--line-2);stroke-width:1.5}
+  .box-a{fill:var(--accent-soft);stroke:var(--accent-line);stroke-width:1.5}
+  .box-ok{fill:var(--ok-soft);stroke:var(--ok);stroke-width:1.5}
+  .box-bad{fill:var(--bad-soft);stroke:var(--bad);stroke-width:1.5}
+  .hollow{fill:none;stroke:var(--line-2);stroke-width:1.5}
+  .dash{stroke-dasharray:5 4}
+  .edge{stroke:var(--ink-2);stroke-width:1.5;fill:none}
+  .edge-a{stroke:var(--accent);stroke-width:2;fill:none}
+  .edge-bad{stroke:var(--bad);stroke-width:1.5;fill:none}
+  .edge-thick{stroke:var(--ink-2);stroke-width:4;fill:none}
+  .ah{fill:var(--ink-2)}
+  .ah-a{fill:var(--accent)}
+  .ah-bad{fill:var(--bad)}
+  .t{font-size:12px}
+  .t-s{font-size:10.5px}
+  .t-b{font-size:12px;font-weight:700}
+  .t-dim{fill:var(--ink-2)}
+  .t-a{fill:var(--accent);font-weight:700}
+  .t-ok{fill:var(--ok);font-weight:700}
+  .t-bad{fill:var(--bad);font-weight:700}
+  .band{
+    font-size:10px;letter-spacing:.13em;fill:var(--ink-2);
+  }
+  .num-big{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums}
+
+  /* ── code block ───────────────────────────── */
+  pre{
+    font-family:var(--mono);font-size:.8125rem;line-height:1.65;
+    background:var(--surface);border:1px solid var(--line);
+    padding:20px 22px;overflow-x:auto;margin:24px 0;
+  }
+  pre .c{color:var(--ink-2)}
+  pre .k{color:var(--accent);font-weight:600}
+
+  /* ── review list ──────────────────────────── */
+  .review{list-style:none;padding:0;margin:24px 0 0;display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line)}
+  .review li{background:var(--surface);padding:16px 18px;display:grid;grid-template-columns:52px 1fr;gap:16px;align-items:start}
+  .rid{
+    font-family:var(--mono);font-size:.75rem;font-weight:700;color:var(--accent);
+    letter-spacing:.04em;padding-top:2px;
+  }
+  .review h3{font-size:.9375rem;margin:0 0 5px;font-weight:650}
+  .rid.ok{color:var(--ok)}
+  .review p{margin:0;font-size:.875rem;color:var(--ink-2)}
+
+  /* ── per-figure spec ──────────────────────── */
+  .spec{
+    background:var(--surface);border:1px solid var(--line);
+    margin:26px 0 4px;
+  }
+  .spec-hd{
+    display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+    padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface-2);
+  }
+  .spec-hd .tag{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--accent);font-weight:700;
+  }
+  .spec-hd .ttl{font-family:var(--mono);font-size:.8125rem;font-weight:650}
+  .spec dl{margin:0;display:grid;grid-template-columns:112px 1fr}
+  .spec dt{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.11em;
+    text-transform:uppercase;color:var(--ink-2);
+    padding:13px 0 13px 18px;border-top:1px solid var(--line);
+  }
+  .spec dd{
+    margin:0;padding:12px 18px 12px 8px;font-size:.875rem;
+    border-top:1px solid var(--line);
+  }
+  .spec dl>dt:first-of-type,.spec dl>dt:first-of-type+dd{border-top:none}
+  .spec dd code{font-size:.8125em}
+  .spec dd ul{margin:0;padding-left:17px}
+  .spec dd li{margin-bottom:3px}
+  .spec dd li:last-child{margin-bottom:0}
+  .spec .open{color:var(--accent);font-family:var(--mono);font-weight:700;font-size:.8125rem}
+  .spec .done{color:var(--ok);font-family:var(--mono);font-weight:700;font-size:.8125rem;margin-right:.35em}
+
+  .callout{
+    background:var(--surface);border:1px solid var(--line);
+    border-left:3px solid var(--accent);padding:18px 20px;margin:24px 0;
+  }
+  .callout p:last-child{margin-bottom:0}
+  .callout .k{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.13em;
+    text-transform:uppercase;color:var(--accent);display:block;margin-bottom:8px;
+  }
+
+  table{border-collapse:collapse;width:100%;margin:22px 0;font-size:.875rem}
+  th,td{text-align:left;padding:9px 14px;border-bottom:1px solid var(--line)}
+  th{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.11em;
+    text-transform:uppercase;color:var(--ink-2);font-weight:500;
+  }
+  td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+  .tbl-wrap{overflow-x:auto}
+
+  footer{padding:44px 0 0;color:var(--ink-2);font-size:.8125rem;font-family:var(--mono)}
+  a{color:var(--accent)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  @media (prefers-reduced-motion:no-preference){
+    section{scroll-margin-top:24px}
+  }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">Ontology Engine · build 01 · 17 Aug 2026</p>
+  <h1><span class="lede">grain</span><br>architecture</h1>
+  <p class="standfirst">A declarative ontology layer over relational data. The agent is handed
+  objects, links and grain-aware metrics — never tables, never SQL. It emits a typed spec; the
+  engine decides whether that spec can be answered correctly, and refuses when it can't.</p>
+
+  <dl class="facts">
+    <div class="fact"><dt>Repo</dt><dd>~/projects/grain</dd></div>
+    <div class="fact"><dt>Database</dt><dd class="on">chinook · 11 tables · loaded</dd></div>
+    <div class="fact"><dt>Milestone</dt><dd>1 of 10 complete</dd></div>
+    <div class="fact"><dt>Code</dt><dd class="off">none yet</dd></div>
+  </dl>
+</header>
+
+<!-- ══════════════════ 1 ══════════════════ -->
+<section>
+  <h2><span class="num">01</span>The failure this exists to prevent</h2>
+  <p class="sub">Measured on the loaded database, 17 Aug 2026</p>
+  <div class="prose">
+    <p>A metric only means something at the grain of the table it aggregates. Join that table to
+    anything with higher cardinality and its rows are replicated, so the sum silently multiplies.
+    <strong>Grain is nowhere in the schema</strong> — a foreign key records <em>that</em> two tables
+    relate, never <em>what one row means</em> — so an agent writing SQL from a schema dump cannot
+    reason about it.</p>
+    <p>Two things make this worse than it first looks. The offending join is <strong>not itself
+    wrong</strong> — the same path is correct for a metric that lives at the finer grain, so no rule
+    about joins can catch it. And the inflation factor isn't the average line count you might divide
+    by to sanity-check it: it is <strong>weighted by the very quantity being measured</strong>, since
+    larger invoices carry more lines. Here that lifts it from 5.44 to 8.95.</p>
+  </div>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 1000 396" role="img" aria-label="Three versions of the same revenue question. First, aggregating invoice.total at invoice grain returns 2328.60, correct. Second, the identical join down to invoice_line aggregating unit_price times quantity also returns 2328.60, correct. Third, that same join aggregating invoice.total returns 20848.62, an 8.95 times overstatement. Rows two and three share an identical join and differ only in which metric is summed.">
+        <defs>
+          <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah" points="0,1 10,5 0,9"/>
+          </marker>
+        </defs>
+
+        <!-- band 1 -->
+        <text class="band" x="20" y="26">CORRECT — METRIC AGGREGATED AT ITS OWN GRAIN</text>
+        <rect class="box" x="20" y="34" width="124" height="42" rx="2"/>
+        <text class="t-s" x="82" y="60" text-anchor="middle">Customer</text>
+        <line class="edge" x1="144" y1="55" x2="186" y2="55" marker-end="url(#arA)"/>
+        <text class="t-s t-dim" x="165" y="46" text-anchor="middle">1:N</text>
+        <rect class="box" x="192" y="34" width="124" height="42" rx="2"/>
+        <text class="t-s" x="254" y="60" text-anchor="middle">Invoice</text>
+        <line class="edge" x1="316" y1="55" x2="546" y2="55" marker-end="url(#arA)"/>
+        <rect class="box-ok" x="552" y="34" width="250" height="42" rx="2"/>
+        <text class="t-s t-ok" x="677" y="60" text-anchor="middle">sum(invoice.total)</text>
+        <text class="num-big t-ok" x="818" y="62">2 328.60</text>
+
+        <!-- band 2 -->
+        <text class="band" x="20" y="114">ALSO CORRECT — SAME JOIN, METRIC THAT LIVES AT THE FINER GRAIN</text>
+        <rect class="box" x="20" y="122" width="124" height="42" rx="2"/>
+        <text class="t-s" x="82" y="148" text-anchor="middle">Customer</text>
+        <line class="edge" x1="144" y1="143" x2="186" y2="143" marker-end="url(#arA)"/>
+        <text class="t-s t-dim" x="165" y="134" text-anchor="middle">1:N</text>
+        <rect class="box" x="192" y="122" width="124" height="42" rx="2"/>
+        <text class="t-s" x="254" y="148" text-anchor="middle">Invoice</text>
+        <line class="edge" x1="316" y1="143" x2="358" y2="143" marker-end="url(#arA)"/>
+        <text class="t-s t-dim" x="337" y="134" text-anchor="middle">1:N</text>
+        <rect class="box" x="364" y="122" width="140" height="42" rx="2"/>
+        <text class="t-s" x="434" y="148" text-anchor="middle">InvoiceLine</text>
+        <line class="edge" x1="504" y1="143" x2="546" y2="143" marker-end="url(#arA)"/>
+        <rect class="box-ok" x="552" y="122" width="250" height="42" rx="2"/>
+        <text class="t-s t-ok" x="677" y="141" text-anchor="middle">sum(unit_price × quantity)</text>
+        <text class="t-s t-dim" x="677" y="156" text-anchor="middle">lives on invoice_line</text>
+        <text class="num-big t-ok" x="818" y="150">2 328.60</text>
+
+        <!-- band 3 -->
+        <text class="band" x="20" y="202">WRONG — IDENTICAL JOIN, METRIC THAT LIVES AT THE COARSER GRAIN</text>
+        <rect class="box" x="20" y="210" width="124" height="42" rx="2"/>
+        <text class="t-s" x="82" y="236" text-anchor="middle">Customer</text>
+        <line class="edge" x1="144" y1="231" x2="186" y2="231" marker-end="url(#arA)"/>
+        <text class="t-s t-dim" x="165" y="222" text-anchor="middle">1:N</text>
+        <rect class="box" x="192" y="210" width="124" height="42" rx="2"/>
+        <text class="t-s" x="254" y="236" text-anchor="middle">Invoice</text>
+        <line class="edge" x1="316" y1="231" x2="358" y2="231" marker-end="url(#arA)"/>
+        <text class="t-s t-dim" x="337" y="222" text-anchor="middle">1:N</text>
+        <rect class="box" x="364" y="210" width="140" height="42" rx="2"/>
+        <text class="t-s" x="434" y="236" text-anchor="middle">InvoiceLine</text>
+        <line class="edge" x1="504" y1="231" x2="546" y2="231" marker-end="url(#arA)"/>
+        <rect class="box-bad" x="552" y="210" width="250" height="42" rx="2"/>
+        <text class="t-s t-bad" x="677" y="229" text-anchor="middle">sum(invoice.total)</text>
+        <text class="t-s t-dim" x="677" y="244" text-anchor="middle">lives on invoice — replicated 1× per line</text>
+        <text class="num-big t-bad" x="818" y="238">20 848.62</text>
+
+        <!-- verdict -->
+        <rect class="hollow dash" x="20" y="182" width="960" height="88" rx="3"/>
+        <text class="t-s t-dim" x="20" y="298">Bands 2 and 3 have an identical join. Only the metric differs.</text>
+        <rect class="box-bad" x="20" y="312" width="470" height="62" rx="2"/>
+        <text class="t-b t-bad" x="255" y="334" text-anchor="middle">× 8.95 overstated · no error, no warning</text>
+        <text class="t-s t-dim" x="255" y="351" text-anchor="middle">right magnitude, right sign, right type —</text>
+        <text class="t-s t-dim" x="255" y="365" text-anchor="middle">nothing downstream can tell it is wrong</text>
+        <rect class="box-2" x="510" y="312" width="470" height="62" rx="2"/>
+        <text class="t-b" x="745" y="334" text-anchor="middle">and you cannot back it out</text>
+        <text class="t-s t-dim" x="745" y="351" text-anchor="middle">the factor is not the average 5.44 lines per invoice —</text>
+        <text class="t-s t-dim" x="745" y="365" text-anchor="middle">it is total-weighted, so the error tracks what you measure</text>
+      </svg>
+    </div>
+    <figcaption>The join is not the villain — the <em>pairing</em> is. Bands 2 and 3 traverse an
+    identical path and differ only in which metric they sum, so no rule about joins can catch this;
+    only a rule about grain can. The engine's job is to make band 3 unconstructible rather than
+    merely discouraged.</figcaption>
+  </figure>
+
+  <div class="spec">
+    <div class="spec-hd"><span class="tag">Spec 01</span><span class="ttl">Grain-aware aggregation</span></div>
+    <dl>
+      <dt>Plan</dt><dd>Every metric declares a <code>grain</code>; every link declares a
+        <code>cardinality</code>. Before compiling, compare the metric's grain against the finest
+        grain the resolved path reaches. Three outcomes — aggregate <strong>inline</strong>,
+        rewrite as <strong>aggregate-then-join</strong> at the metric's own grain, or
+        <strong>refuse</strong>. Never emit a query whose correctness depends on the current data.</dd>
+      <dt>Lives in</dt><dd><code>engine/grain.py</code> decides · <code>engine/compile.py</code>
+        emits · <code>domains/*/ontology.yaml</code> declares</dd>
+      <dt>Verified by</dt><dd><ul>
+        <li>Unit, no database: <code>QuerySpec</code> → expected SQL for each outcome</li>
+        <li>Integration: <code>revenue</code> and <code>invoice_total</code> both return
+          <strong>2328.60</strong> at their own grains</li>
+        <li>Integration: the fanned path <strong>refuses</strong> — 20848.62 must be unreachable
+          through any spec</li>
+      </ul></dd>
+      <dt>Decided</dt><dd><span class="done">R2 ✓</span> Rewrite <em>and</em> surface it —
+        refusal is not the answer where a correct rewrite exists. Each rewrite appends to a
+        <code>rewrites[]</code> record on the result naming the metric, the fan-out edge that
+        forced it, and the strategy applied. A rewrite the reader cannot see undoes the point of
+        returning <code>compiled_sql</code>.</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ══════════════════ 2 ══════════════════ -->
+<section>
+  <h2><span class="num">02</span>The shape</h2>
+  <p class="sub">Four layers · only the middle two are ours</p>
+  <div class="prose">
+    <p>The library is the product. Every other surface — MCP, CLI, your own chat harness — is a thin
+    adapter over it, and <code>engine/</code> imports none of them. The falsifiable test of this
+    architecture: <strong>pointing grain at a second database must not change a line under
+    <code>engine/</code></strong>.</p>
+  </div>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 1000 580" role="img" aria-label="Layered architecture: clients sit above adapters, adapters pass a QuerySpec into a domain-neutral engine pipeline of validate, resolve, grain analysis, compile and guard; a swappable domain pack is loaded beside the engine; the engine reads PostgreSQL through a read-only role.">
+        <defs>
+          <marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah" points="0,1 10,5 0,9"/>
+          </marker>
+          <marker id="arBa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah-a" points="0,1 10,5 0,9"/>
+          </marker>
+        </defs>
+
+        <!-- clients -->
+        <text class="band" x="20" y="20">CLIENTS — NOT OURS, NOT MAINTAINED HERE</text>
+        <rect class="box-2" x="20" y="30" width="222" height="48" rx="2"/>
+        <text class="t" x="131" y="59" text-anchor="middle">Claude Code</text>
+        <rect class="box-2" x="256" y="30" width="222" height="48" rx="2"/>
+        <text class="t" x="367" y="59" text-anchor="middle">Claude Desktop</text>
+        <rect class="box-2 dash" x="492" y="30" width="222" height="48" rx="2"/>
+        <text class="t" x="603" y="54" text-anchor="middle">your chat UI</text>
+        <text class="t-s t-dim" x="603" y="69" text-anchor="middle">planned · different model</text>
+        <rect class="box-2" x="728" y="30" width="222" height="48" rx="2"/>
+        <text class="t" x="839" y="54" text-anchor="middle">pytest · eval scorer</text>
+        <text class="t-s t-dim" x="839" y="69" text-anchor="middle">no model in the loop</text>
+
+        <line class="edge" x1="131" y1="78" x2="131" y2="116" marker-end="url(#arB)"/>
+        <line class="edge" x1="367" y1="78" x2="367" y2="116" marker-end="url(#arB)"/>
+        <line class="edge dash" x1="603" y1="78" x2="603" y2="116" marker-end="url(#arB)"/>
+        <line class="edge" x1="839" y1="78" x2="839" y2="116" marker-end="url(#arB)"/>
+        <text class="t-s t-dim" x="240" y="102" text-anchor="middle">MCP over stdio</text>
+        <text class="t-s t-dim" x="862" y="102" text-anchor="end">direct import</text>
+
+        <!-- adapters -->
+        <text class="band" x="20" y="138">ADAPTERS — THIN. NO LOGIC LIVES HERE.</text>
+        <rect class="box" x="20" y="148" width="458" height="48" rx="2"/>
+        <text class="t-b" x="249" y="169" text-anchor="middle">grain-mcp</text>
+        <text class="t-s t-dim" x="249" y="185" text-anchor="middle">engine/server.py · ~50 lines</text>
+        <rect class="box dash" x="492" y="148" width="222" height="48" rx="2"/>
+        <text class="t-b" x="603" y="169" text-anchor="middle">your harness</text>
+        <text class="t-s t-dim" x="603" y="185" text-anchor="middle">4th adapter, same core</text>
+        <rect class="box" x="728" y="148" width="222" height="48" rx="2"/>
+        <text class="t-b" x="839" y="169" text-anchor="middle">import grain</text>
+        <text class="t-s t-dim" x="839" y="185" text-anchor="middle">library API</text>
+
+        <line class="edge-a" x1="249" y1="196" x2="249" y2="248" marker-end="url(#arBa)"/>
+        <line class="edge-a dash" x1="603" y1="196" x2="603" y2="248" marker-end="url(#arBa)"/>
+        <line class="edge-a" x1="839" y1="196" x2="839" y2="248" marker-end="url(#arBa)"/>
+        <rect class="box-a" x="352" y="208" width="296" height="28" rx="2"/>
+        <text class="t-b t-a" x="500" y="227" text-anchor="middle">QuerySpec — Pydantic, closed vocabulary</text>
+
+        <!-- engine -->
+        <text class="band" x="20" y="270">ENGINE — DOMAIN-NEUTRAL · NEVER EDITED PER DOMAIN</text>
+        <text class="band" x="700" y="270">DOMAIN PACK — SWAPPABLE</text>
+        <rect class="hollow" x="20" y="280" width="640" height="158" rx="3"/>
+        <rect class="box-2" x="44" y="316" width="112" height="48" rx="2"/>
+        <text class="t-s" x="100" y="345" text-anchor="middle">validate</text>
+        <rect class="box-2" x="172" y="316" width="112" height="48" rx="2"/>
+        <text class="t-s" x="228" y="345" text-anchor="middle">resolve</text>
+        <rect class="box-a" x="300" y="316" width="112" height="48" rx="2"/>
+        <text class="t-s t-a" x="356" y="339" text-anchor="middle">grain</text>
+        <text class="t-s t-a" x="356" y="353" text-anchor="middle">analysis</text>
+        <rect class="box-2" x="428" y="316" width="112" height="48" rx="2"/>
+        <text class="t-s" x="484" y="345" text-anchor="middle">compile</text>
+        <rect class="box-2" x="556" y="316" width="80" height="48" rx="2"/>
+        <text class="t-s" x="596" y="345" text-anchor="middle">guard</text>
+        <line class="edge" x1="156" y1="340" x2="168" y2="340"/>
+        <line class="edge" x1="284" y1="340" x2="296" y2="340"/>
+        <line class="edge" x1="412" y1="340" x2="424" y2="340"/>
+        <line class="edge" x1="540" y1="340" x2="552" y2="340"/>
+        <text class="t-s t-dim" x="340" y="303" text-anchor="middle">the only stage that can refuse a well-formed request</text>
+        <text class="t-s t-dim" x="340" y="410" text-anchor="middle">compiled SQL returned with every result — provenance, not a debug flag</text>
+
+        <rect class="hollow" x="700" y="280" width="250" height="158" rx="3"/>
+        <rect class="box" x="720" y="300" width="210" height="34" rx="2"/>
+        <text class="t-s" x="825" y="322" text-anchor="middle">ontology.yaml</text>
+        <rect class="box" x="720" y="342" width="210" height="34" rx="2"/>
+        <text class="t-s" x="825" y="364" text-anchor="middle">models.py · sqlacodegen</text>
+        <rect class="box" x="720" y="384" width="210" height="34" rx="2"/>
+        <text class="t-s" x="825" y="406" text-anchor="middle">golden.yaml</text>
+        <line class="edge" x1="700" y1="359" x2="666" y2="359" marker-end="url(#arB)"/>
+
+        <line class="edge" x1="340" y1="438" x2="340" y2="492" marker-end="url(#arB)"/>
+        <text class="t-s t-dim" x="356" y="466">SQLAlchemy select() · read-only role · statement_timeout · row cap</text>
+
+        <rect class="box-3" x="20" y="500" width="640" height="52" rx="2"/>
+        <text class="t-b" x="340" y="522" text-anchor="middle">PostgreSQL — chinook</text>
+        <text class="t-s t-dim" x="340" y="539" text-anchor="middle">11 tables · 10 MB · separate database from gx</text>
+      </svg>
+    </div>
+    <figcaption>Adapters are interchangeable and the domain pack is swappable; the engine between
+    them is the only thing that never changes. Your planned chat UI enters as a fourth adapter —
+    which is exactly why <code>server.py</code> must stay logic-free.</figcaption>
+  </figure>
+
+  <div class="spec">
+    <div class="spec-hd"><span class="tag">Spec 02</span><span class="ttl">Keeping the boundary honest</span></div>
+    <dl>
+      <dt>Plan</dt><dd>The library is the product. <code>engine/</code> imports no adapter and no
+        domain module — domain packs are <em>data plus generated code</em>, located by path at
+        startup rather than imported by name. Adapters translate transport to
+        <code>QuerySpec</code> and nothing else.</dd>
+      <dt>Lives in</dt><dd><code>engine/loader.py</code> takes a directory path ·
+        <code>engine/server.py</code> stays under ~50 lines</dd>
+      <dt>Verified by</dt><dd><ul>
+        <li><strong>Milestone 8:</strong> point it at a second database, write a ~20-line ontology,
+          answer one grouped-metric question. Pass condition is <strong>zero lines changed under
+          <code>src/grain/engine/</code></strong></li>
+        <li>An import-linter rule in CI, so the boundary can't rot quietly between milestones —
+          a one-off test proves it once, a lint rule keeps it true</li>
+      </ul></dd>
+      <dt>Open</dt><dd><span class="open">R6</span> — choose the second domain now, so Chinook's
+        shape can't leak into <code>engine/</code> for seven milestones first?</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ══════════════════ 3 ══════════════════ -->
+<section>
+  <h2><span class="num">03</span>Where a request can die</h2>
+  <p class="sub">Every failure is caught before the database, and names its own fix</p>
+  <div class="prose">
+    <p>The agent reads errors and retries, so an error that only says <em>no</em> wastes a turn. Each
+    stage raises a typed failure carrying the legal alternative — which is what lets the loop
+    converge instead of drift.</p>
+  </div>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 1000 330" role="img" aria-label="A QuerySpec passes through validate, resolve, grain analysis, compile and guard. The first three stages can raise typed errors — UnknownName, NoPath or AmbiguousPath, and FanOutRefused — all before the database boundary. Only guard and execute touch PostgreSQL.">
+        <defs>
+          <marker id="arC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah" points="0,1 10,5 0,9"/>
+          </marker>
+          <marker id="arCbad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah-bad" points="0,1 10,5 0,9"/>
+          </marker>
+        </defs>
+
+        <rect class="box-a" x="16" y="46" width="106" height="46" rx="2"/>
+        <text class="t-s t-a" x="69" y="74" text-anchor="middle">QuerySpec</text>
+
+        <rect class="box-2" x="154" y="46" width="132" height="46" rx="2"/>
+        <text class="t-s" x="220" y="74" text-anchor="middle">validate</text>
+        <rect class="box-2" x="318" y="46" width="132" height="46" rx="2"/>
+        <text class="t-s" x="384" y="74" text-anchor="middle">resolve</text>
+        <rect class="box-a" x="482" y="46" width="132" height="46" rx="2"/>
+        <text class="t-s t-a" x="548" y="74" text-anchor="middle">grain analysis</text>
+        <rect class="box-2" x="646" y="46" width="112" height="46" rx="2"/>
+        <text class="t-s" x="702" y="74" text-anchor="middle">compile</text>
+        <rect class="box-2" x="790" y="46" width="112" height="46" rx="2"/>
+        <text class="t-s" x="846" y="74" text-anchor="middle">guard</text>
+
+        <line class="edge" x1="122" y1="69" x2="150" y2="69" marker-end="url(#arC)"/>
+        <line class="edge" x1="286" y1="69" x2="314" y2="69" marker-end="url(#arC)"/>
+        <line class="edge" x1="450" y1="69" x2="478" y2="69" marker-end="url(#arC)"/>
+        <line class="edge" x1="614" y1="69" x2="642" y2="69" marker-end="url(#arC)"/>
+        <line class="edge" x1="758" y1="69" x2="786" y2="69" marker-end="url(#arC)"/>
+        <line class="edge" x1="902" y1="69" x2="960" y2="69" marker-end="url(#arC)"/>
+        <text class="t-s t-ok" x="962" y="60">rows</text>
+        <text class="t-s t-ok" x="962" y="74">+ SQL</text>
+
+        <line class="edge-bad" x1="220" y1="92" x2="220" y2="142" marker-end="url(#arCbad)"/>
+        <line class="edge-bad" x1="384" y1="92" x2="384" y2="142" marker-end="url(#arCbad)"/>
+        <line class="edge-bad" x1="548" y1="92" x2="548" y2="142" marker-end="url(#arCbad)"/>
+
+        <rect class="box-bad" x="148" y="146" width="144" height="62" rx="2"/>
+        <text class="t-s t-bad" x="220" y="167" text-anchor="middle">UnknownName</text>
+        <text class="t-s t-dim" x="220" y="184" text-anchor="middle">+ nearest valid</text>
+        <text class="t-s t-dim" x="220" y="198" text-anchor="middle">names</text>
+
+        <rect class="box-bad" x="306" y="146" width="156" height="62" rx="2"/>
+        <text class="t-s t-bad" x="384" y="167" text-anchor="middle">NoPath · Ambiguous</text>
+        <text class="t-s t-dim" x="384" y="184" text-anchor="middle">+ what does connect</text>
+        <text class="t-s t-dim" x="384" y="198" text-anchor="middle">these two objects</text>
+
+        <rect class="box-bad" x="470" y="146" width="156" height="62" rx="2"/>
+        <text class="t-s t-bad" x="548" y="167" text-anchor="middle">FanOutRefused</text>
+        <text class="t-s t-dim" x="548" y="184" text-anchor="middle">+ the metric's grain</text>
+        <text class="t-s t-dim" x="548" y="198" text-anchor="middle">+ the safe rewrite</text>
+
+        <line class="edge dash" x1="770" y1="20" x2="770" y2="300"/>
+        <text class="band" x="782" y="242">DATABASE BOUNDARY</text>
+        <text class="t-s t-dim" x="782" y="260">Nothing above reaches Postgres.</text>
+        <text class="t-s t-dim" x="782" y="276">No cost, no lock, no timeout</text>
+        <text class="t-s t-dim" x="782" y="292">spent learning a spec was wrong.</text>
+
+        <rect class="hollow dash" x="140" y="126" width="500" height="92" rx="3"/>
+        <text class="band" x="150" y="120">TYPED REFUSALS — EACH NAMES A LEGAL NEXT MOVE</text>
+      </svg>
+    </div>
+    <figcaption>Three of the five stages can refuse, and all three sit left of the database
+    boundary. A refusal costs one retry; a wrong number costs trust — so refusing is the correct
+    outcome, not a degraded one.</figcaption>
+  </figure>
+
+  <div class="spec">
+    <div class="spec-hd"><span class="tag">Spec 03</span><span class="ttl">Errors as an interface</span></div>
+    <dl>
+      <dt>Plan</dt><dd>One typed exception hierarchy. Every error carries the offending name
+        <em>and</em> the legal alternatives — nearest valid names, what does connect two objects,
+        the safe reformulation of a metric. No error may be raised that only says no. All of them
+        are raised <strong>before a database session is acquired</strong>.</dd>
+      <dt>Lives in</dt><dd><code>engine/errors.py</code> defines · raised from
+        <code>resolve.py</code> and <code>grain.py</code></dd>
+      <dt>Verified by</dt><dd><ul>
+        <li>One unit test per error type asserting the message names an alternative that is itself
+          valid — the suggestion has to resolve, or it wastes the retry it was meant to save</li>
+        <li>A test asserting <strong>no connection is opened</strong> on any failure path</li>
+      </ul></dd>
+      <dt>Decided</dt><dd><span class="done">R4 ✓</span> Keep five stages. The separation is
+        earning its keep in error attribution — each stage owns a distinct failure class, which is
+        what lets an error name a specific fix rather than a general one.</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ══════════════════ 4 ══════════════════ -->
+<section>
+  <h2><span class="num">04</span>The grain decision</h2>
+  <p class="sub">The one piece of reasoning the database cannot do for us</p>
+  <div class="prose">
+    <p>Run per requested metric. Cardinality comes from the ontology, declared rather than inferred —
+    a foreign key proves <code>many_to_one</code>, but nothing in the schema reliably proves the
+    reverse.</p>
+  </div>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 1000 430" role="img" aria-label="Decision flow for each metric: if its grain is not on the join path, raise NoPath. If every edge to the grain is many-to-one, aggregate inline. Otherwise, if group-by keys are reachable without further fan-out, aggregate at grain in a subquery and left join back; if not, raise FanOutRefused. A separate branch detects two one-to-many edges from the same relation as a chasm trap.">
+        <defs>
+          <marker id="arD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah" points="0,1 10,5 0,9"/>
+          </marker>
+        </defs>
+
+        <rect class="box-a" x="20" y="24" width="230" height="44" rx="2"/>
+        <text class="t-s t-a" x="135" y="51" text-anchor="middle">metric m at grain g</text>
+
+        <path class="edge" d="M135 68 L135 96" marker-end="url(#arD)"/>
+        <polygon class="box-2" points="135,100 285,140 135,180 -15,140"/>
+        <text class="t-s" x="135" y="136" text-anchor="middle">is g on the</text>
+        <text class="t-s" x="135" y="150" text-anchor="middle">join path?</text>
+
+        <path class="edge" d="M285 140 L340 140" marker-end="url(#arD)"/>
+        <text class="t-s t-dim" x="312" y="132" text-anchor="middle">no</text>
+        <rect class="box-bad" x="344" y="118" width="130" height="44" rx="2"/>
+        <text class="t-s t-bad" x="409" y="145" text-anchor="middle">NoPath</text>
+
+        <path class="edge" d="M135 180 L135 208" marker-end="url(#arD)"/>
+        <text class="t-s t-dim" x="148" y="198">yes</text>
+        <polygon class="box-2" points="135,212 305,254 135,296 -35,254"/>
+        <text class="t-s" x="135" y="244" text-anchor="middle">every edge root→g</text>
+        <text class="t-s" x="135" y="258" text-anchor="middle">many_to_one?</text>
+        <text class="t-s t-dim" x="135" y="274" text-anchor="middle">(no fan-out)</text>
+
+        <path class="edge" d="M135 296 L135 336" marker-end="url(#arD)"/>
+        <text class="t-s t-dim" x="148" y="322">yes</text>
+        <rect class="box-ok" x="20" y="340" width="230" height="52" rx="2"/>
+        <text class="t-s t-ok" x="135" y="362" text-anchor="middle">aggregate inline</text>
+        <text class="t-s t-dim" x="135" y="378" text-anchor="middle">plain GROUP BY</text>
+
+        <path class="edge" d="M305 254 L360 254" marker-end="url(#arD)"/>
+        <text class="t-s t-dim" x="332" y="246" text-anchor="middle">no</text>
+        <polygon class="box-2" points="520,212 700,254 520,296 340,254"/>
+        <text class="t-s" x="520" y="244" text-anchor="middle">group-by keys reachable</text>
+        <text class="t-s" x="520" y="258" text-anchor="middle">from g without further</text>
+        <text class="t-s" x="520" y="272" text-anchor="middle">fan-out?</text>
+
+        <path class="edge" d="M520 296 L520 336" marker-end="url(#arD)"/>
+        <text class="t-s t-dim" x="533" y="322">yes</text>
+        <rect class="box-ok" x="380" y="340" width="280" height="52" rx="2"/>
+        <text class="t-s t-ok" x="520" y="362" text-anchor="middle">aggregate-then-join</text>
+        <text class="t-s t-dim" x="520" y="378" text-anchor="middle">subquery at g's grain, LEFT JOIN back</text>
+
+        <path class="edge" d="M700 254 L756 254" marker-end="url(#arD)"/>
+        <text class="t-s t-dim" x="728" y="246" text-anchor="middle">no</text>
+        <rect class="box-bad" x="760" y="228" width="220" height="52" rx="2"/>
+        <text class="t-s t-bad" x="870" y="250" text-anchor="middle">FanOutRefused</text>
+        <text class="t-s t-dim" x="870" y="266" text-anchor="middle">names grain, edge, rewrite</text>
+
+        <line class="edge dash" x1="700" y1="40" x2="700" y2="180"/>
+        <rect class="hollow dash" x="708" y="24" width="272" height="156" rx="3"/>
+        <text class="band" x="720" y="46">RUN ALONGSIDE — CHASM CHECK</text>
+        <text class="t-s t-dim" x="720" y="68">Two or more one_to_many edges</text>
+        <text class="t-s t-dim" x="720" y="84">branching from the same relation,</text>
+        <text class="t-s t-dim" x="720" y="100">aggregated across both →</text>
+        <text class="t-s t-bad" x="720" y="120">isolate each branch, or refuse.</text>
+        <text class="t-s t-dim" x="720" y="144">Chinook's case: Track → InvoiceLine</text>
+        <text class="t-s t-dim" x="720" y="160">and Track → PlaylistTrack.</text>
+
+        <text class="t-s t-dim" x="20" y="418">Metrics at differing grains each get their own subquery, joined back on the shared group-by keys.</text>
+      </svg>
+    </div>
+    <figcaption>Only the two green outcomes return a number. Everything else refuses — and the
+    refusal is the feature, because the alternative is a plausible wrong answer nobody can detect
+    downstream.</figcaption>
+  </figure>
+
+  <div class="spec">
+    <div class="spec-hd"><span class="tag">Spec 04</span><span class="ttl">The analysis pass</span></div>
+    <dl>
+      <dt>Plan</dt><dd>A <strong>total function</strong>: every <code>(path, metric)</code> pair
+        lands in exactly one outcome, from declared cardinality alone — no data access, so the
+        verdict cannot drift as rows are added. Runs per metric, so a query with metrics at three
+        grains gets three verdicts and three subqueries. <strong>Additivity is computed alongside
+        and is orthogonal</strong>: a response can be <em>aggregate-then-join</em> and
+        <em>non-additive</em> at once, which is exactly what <em>revenue by playlist</em> is.</dd>
+      <dt>Lives in</dt><dd><code>engine/grain.py</code></dd>
+      <dt>Verified by</dt><dd><ul>
+        <li>A branch-per-row truth table — every path through the diagram gets a unit test</li>
+        <li>Chasm branch tested against <code>Track → InvoiceLine</code> +
+          <code>Track → PlaylistTrack</code>. <strong>Not</strong> <code>Employee</code>, which
+          returns 0 rows and would pass vacuously</li>
+        <li>A property test that the function is total: no input reaches the end without a verdict</li>
+      </ul></dd>
+      <dt>Open</dt><dd>Where does the <code>additive: false</code> flag surface — result metadata
+        only, or also in <code>describe_ontology</code>, so the agent can caveat before asking
+        rather than after?</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ══════════════════ 5 ══════════════════ -->
+<section>
+  <h2><span class="num">05</span>The Chinook ontology</h2>
+  <p class="sub">The first domain pack — chosen because it forces every construct</p>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 1000 500" role="img" aria-label="Chinook object graph. Artist to Album to Track are direct links. Genre and MediaType join into the Track object type. Playlist connects to Track through the playlist_track join table. Customer to Invoice to InvoiceLine are direct links, InvoiceLine points back to Track, Customer links to Employee by support rep, and Employee links to itself recursively. Metric grains sit on Track, Invoice and InvoiceLine.">
+        <defs>
+          <marker id="arE" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah" points="0,1 10,5 0,9"/>
+          </marker>
+        </defs>
+
+        <!-- Track object type enclosure -->
+        <rect class="hollow dash" x="26" y="196" width="330" height="120" rx="4"/>
+        <text class="band" x="36" y="190">ONE OBJECT TYPE — THREE TABLES</text>
+
+        <rect class="box" x="40" y="40" width="140" height="42" rx="2"/>
+        <text class="t-s" x="110" y="66" text-anchor="middle">Artist</text>
+        <rect class="box" x="40" y="118" width="140" height="42" rx="2"/>
+        <text class="t-s" x="110" y="144" text-anchor="middle">Album</text>
+        <rect class="box-a" x="40" y="234" width="140" height="46" rx="2"/>
+        <text class="t-s t-a" x="110" y="254" text-anchor="middle">Track</text>
+        <text class="t-s t-dim" x="110" y="270" text-anchor="middle">★ track_count</text>
+
+        <rect class="box-2" x="216" y="212" width="126" height="38" rx="2"/>
+        <text class="t-s" x="279" y="236" text-anchor="middle">Genre</text>
+        <rect class="box-2" x="216" y="262" width="126" height="38" rx="2"/>
+        <text class="t-s" x="279" y="286" text-anchor="middle">MediaType</text>
+        <line class="edge dash" x1="180" y1="248" x2="212" y2="231"/>
+        <line class="edge dash" x1="180" y1="266" x2="212" y2="281"/>
+
+        <line class="edge" x1="110" y1="82" x2="110" y2="114" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="122" y="103">1:N</text>
+        <line class="edge" x1="110" y1="160" x2="110" y2="230" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="122" y="199">1:N</text>
+
+        <rect class="box" x="40" y="400" width="140" height="42" rx="2"/>
+        <text class="t-s" x="110" y="426" text-anchor="middle">Playlist</text>
+        <path class="edge-thick" d="M110 400 L110 284" marker-end="url(#arE)"/>
+        <rect class="box-2" x="192" y="330" width="164" height="38" rx="2"/>
+        <text class="t-s" x="274" y="354" text-anchor="middle">through playlist_track</text>
+        <line class="edge dash" x1="192" y1="349" x2="114" y2="349"/>
+
+        <!-- sales side -->
+        <rect class="box" x="800" y="40" width="150" height="42" rx="2"/>
+        <text class="t-s" x="875" y="66" text-anchor="middle">Customer</text>
+        <rect class="box-a" x="800" y="150" width="150" height="46" rx="2"/>
+        <text class="t-s t-a" x="875" y="170" text-anchor="middle">Invoice</text>
+        <text class="t-s t-dim" x="875" y="186" text-anchor="middle">★ invoice_total</text>
+        <rect class="box-a" x="560" y="272" width="170" height="46" rx="2"/>
+        <text class="t-s t-a" x="645" y="292" text-anchor="middle">InvoiceLine</text>
+        <text class="t-s t-dim" x="645" y="308" text-anchor="middle">★ revenue · units_sold</text>
+
+        <line class="edge" x1="875" y1="82" x2="875" y2="146" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="887" y="118">1:N</text>
+        <path class="edge" d="M860 196 L700 268" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="800" y="228">1:N</text>
+        <path class="edge" d="M560 292 L184 262" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="380" y="272" text-anchor="middle">N:1</text>
+
+        <rect class="box" x="800" y="400" width="150" height="42" rx="2"/>
+        <text class="t-s" x="875" y="426" text-anchor="middle">Employee</text>
+        <path class="edge" d="M950 61 C 990 61 990 421 954 421" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="962" y="240">support_rep</text>
+        <path class="edge" d="M800 412 C 740 400 740 442 796 432" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="700" y="425" text-anchor="end">reports_to</text>
+        <text class="t-s t-dim" x="700" y="440" text-anchor="end">recursive · 3 levels</text>
+
+        <!-- legend -->
+        <rect class="hollow" x="400" y="380" width="330" height="86" rx="3"/>
+        <text class="band" x="414" y="400">LEGEND</text>
+        <line class="edge" x1="414" y1="416" x2="450" y2="416" marker-end="url(#arE)"/>
+        <text class="t-s t-dim" x="458" y="420">direct — a foreign key</text>
+        <line class="edge-thick" x1="414" y1="436" x2="450" y2="436"/>
+        <text class="t-s t-dim" x="458" y="440">through — join table never surfaces</text>
+        <line class="edge dash" x1="414" y1="456" x2="450" y2="456"/>
+        <text class="t-s t-dim" x="458" y="460">same object type · ★ = metric grain</text>
+      </svg>
+    </div>
+    <figcaption>Chinook was picked for hand-checkable answers, but it earns its place structurally:
+    three link kinds, an object spanning three tables, two differently-shaped routes into
+    <code>Employee</code>, and three metrics at three different grains.</figcaption>
+  </figure>
+
+  <div class="spec">
+    <div class="spec-hd"><span class="tag">Spec 05</span><span class="ttl">Declaring a domain</span></div>
+    <dl>
+      <dt>Plan</dt><dd>One YAML file per domain: object types (which may span tables via named
+        outer joins), link types (<code>direct</code> · <code>through</code> ·
+        <code>recursive</code>, each with explicit path and declared cardinality), and metrics
+        carrying grain and <code>ai_context</code>. Cardinality is <strong>declared, never
+        sniffed</strong> — inferring it from data infers a schema property from an accident of the
+        current rows.</dd>
+      <dt>Lives in</dt><dd><code>domains/chinook/ontology.yaml</code> ·
+        <code>engine/ontology.py</code> types it · <code>engine/loader.py</code> validates it</dd>
+      <dt>Verified by</dt><dd><ul>
+        <li>Loader validates every column and table against ORM metadata <strong>at startup</strong>
+          — a typo fails at boot, not mid-query</li>
+        <li>Every declared link resolves to a real path; every metric's grain is a real table</li>
+        <li><code>golden.yaml</code> answers hand-verified against the loaded database</li>
+      </ul></dd>
+      <dt>Decided</dt><dd><span class="done">R1 ✓</span> Structured pairs:
+        <code>on: [{from: track.album_id, to: album.album_id}]</code>. No grammar to write and no
+        parser to get wrong; a malformed pair fails at load, not mid-query. Composite keys fall out
+        as a longer list, and the shape matches Ossie's <code>from_columns</code>/<code>to_columns</code>,
+        so the exporter stays mechanical.</dd>
+    </dl>
+  </div>
+
+  <div class="tbl-wrap">
+  <table>
+    <thead><tr><th>Metric</th><th>Grain</th><th style="text-align:right">Value</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td><code>revenue</code></td><td><code>invoice_line</code></td><td class="n">2 328.60</td><td>the correct revenue figure</td></tr>
+      <tr><td><code>invoice_total</code></td><td><code>invoice</code></td><td class="n">2 328.60</td><td>equal only at its own grain</td></tr>
+      <tr><td><code>track_count</code></td><td><code>track</code></td><td class="n">3 503</td><td>—</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- ══════════════════ 6 ══════════════════ -->
+<section>
+  <h2><span class="num">06</span>How it gets settled</h2>
+  <p class="sub">Two arms, one harness — everything fixed except the toolset</p>
+  <div class="prose">
+    <p>The claim is narrow and stated in advance: <strong>the ontology should win on grain
+    correctness and deep traversal, and roughly tie everywhere else.</strong> Raw text-to-SQL is
+    expected to tie on the single-hop half. If arm A doesn't win on the traps, the design is wrong.</p>
+  </div>
+
+  <figure>
+    <div class="scroll">
+      <svg viewBox="0 0 1000 360" role="img" aria-label="Ablation setup: one client, model, prompt and question set feed two arms. Arm A uses grain-mcp with describe_ontology, explain and query. Arm B uses grain-sql-mcp with get_schema and run_sql. Both share the identical guard and the same PostgreSQL database, so the toolset is the only variable.">
+        <defs>
+          <marker id="arF" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <polygon class="ah" points="0,1 10,5 0,9"/>
+          </marker>
+        </defs>
+
+        <rect class="box-2" x="300" y="20" width="400" height="52" rx="2"/>
+        <text class="t-b" x="500" y="42" text-anchor="middle">one client · one model · one prompt · 25 questions</text>
+        <text class="t-s t-dim" x="500" y="59" text-anchor="middle">held identical by construction — this is what makes it an ablation</text>
+
+        <line class="edge" x1="420" y1="72" x2="250" y2="112" marker-end="url(#arF)"/>
+        <line class="edge" x1="580" y1="72" x2="750" y2="112" marker-end="url(#arF)"/>
+
+        <rect class="box-a" x="60" y="116" width="380" height="120" rx="3"/>
+        <text class="band" x="76" y="138">ARM A — THE ONTOLOGY</text>
+        <text class="t-b t-a" x="76" y="160">grain-mcp</text>
+        <rect class="box" x="76" y="172" width="112" height="30" rx="2"/>
+        <text class="t-s" x="132" y="192" text-anchor="middle">describe_ontology</text>
+        <rect class="box" x="196" y="172" width="88" height="30" rx="2"/>
+        <text class="t-s" x="240" y="192" text-anchor="middle">explain</text>
+        <rect class="box" x="292" y="172" width="88" height="30" rx="2"/>
+        <text class="t-s" x="336" y="192" text-anchor="middle">query</text>
+        <text class="t-s t-dim" x="76" y="222">no schema dump — the agent is told the domain, not the tables</text>
+
+        <rect class="box-2" x="560" y="116" width="380" height="120" rx="3"/>
+        <text class="band" x="576" y="138">ARM B — THE FAIR BASELINE</text>
+        <text class="t-b" x="576" y="160">grain-sql-mcp</text>
+        <rect class="box" x="576" y="172" width="112" height="30" rx="2"/>
+        <text class="t-s" x="632" y="192" text-anchor="middle">get_schema</text>
+        <rect class="box" x="696" y="172" width="88" height="30" rx="2"/>
+        <text class="t-s" x="740" y="192" text-anchor="middle">run_sql</text>
+        <text class="t-s t-dim" x="576" y="222">real schema dump, real SQL — expected to tie on single-hop</text>
+
+        <line class="edge" x1="250" y1="236" x2="410" y2="272" marker-end="url(#arF)"/>
+        <line class="edge" x1="750" y1="236" x2="590" y2="272" marker-end="url(#arF)"/>
+
+        <rect class="box-3" x="300" y="276" width="400" height="34" rx="2"/>
+        <text class="t-s" x="500" y="298" text-anchor="middle">IDENTICAL GUARD — read-only role · timeout · row cap</text>
+        <text class="t-s t-dim" x="500" y="332" text-anchor="middle">An unguarded arm B would measure safety instead of semantics, and bury the real result.</text>
+      </svg>
+    </div>
+    <figcaption>Score exact-answer accuracy, turns-to-answer, and — separately — silently-wrong
+    numbers against visible failures. That last split matters most: a refusal costs a retry, a wrong
+    number costs trust.</figcaption>
+  </figure>
+
+  <div class="spec">
+    <div class="spec-hd"><span class="tag">Spec 06</span><span class="ttl">Settling the claim</span></div>
+    <dl>
+      <dt>Plan</dt><dd>25 hand-verified questions written <strong>before</strong> any tuning —
+        roughly 12 single-hop, 13 multi-hop, of which 3–4 are deliberate fan-out traps and 2 are
+        recursive. Two MCP servers under one client, identical guard. Result pre-registered: arm B
+        ties on the single-hop half; <strong>arm A must win on the traps or the design is
+        wrong</strong>.</dd>
+      <dt>Lives in</dt><dd><code>tests/eval/</code> · scorer calls the library directly, not through
+        MCP, so scoring stays deterministic</dd>
+      <dt>Verified by</dt><dd>This <em>is</em> the verification. Scored on exact-answer accuracy,
+        turns-to-answer, and <strong>silently-wrong numbers counted separately from visible
+        failures</strong> — collapsing those two into one accuracy column would hide the entire
+        point.</dd>
+      <dt>Decided</dt><dd><span class="done">R3 ✓</span> Accepted as a <strong>permanent limit,
+        not a gap</strong>. Every arm-A failure is classified before it is counted — grain error
+        (the engine), selection error (<code>ai_context</code> quality), traversal error (the link
+        vocabulary) — and reported in separate columns, so bad prose can never masquerade as a
+        failure of the grain layer.</dd>
+    </dl>
+  </div>
+</section>
+
+<!-- ══════════════════ 7 ══════════════════ -->
+<section>
+  <h2><span class="num">07</span>Repo layout</h2>
+  <p class="sub">~/projects/grain · nothing written yet</p>
+<pre><span class="c"># domain-neutral — the architecture test says this never changes per domain</span>
+src/grain/<span class="k">engine</span>/
+    ontology.py     <span class="c">ObjectType · Property · LinkType · Metric · Ontology</span>
+    loader.py       <span class="c">YAML → Ontology, validated against ORM metadata at startup</span>
+    spec.py         <span class="c">QuerySpec · Filter · Hop · OrderBy</span>
+    resolve.py      <span class="c">names → elements; UnknownName, NoPath, AmbiguousPath</span>
+    grain.py        <span class="c">join graph · cardinality · fan-out and chasm analysis</span>
+    compile.py      <span class="c">resolved spec → sqlalchemy Select</span>
+    guard.py        <span class="c">read-only session · statement_timeout · row cap</span>
+    execute.py
+    describe.py     <span class="c">Ontology → agent-readable description</span>
+    errors.py
+    server.py       <span class="c">MCP adapter — thin, no logic</span>
+
+<span class="c"># swappable — adding a domain touches only this directory</span>
+src/grain/<span class="k">domains</span>/chinook/
+    models.py       <span class="c">sqlacodegen output</span>
+    ontology.yaml   <span class="c">objects · links · metrics</span>
+    golden.yaml     <span class="c">NL question → expected answer</span>
+
+tests/
+    unit/           <span class="c">QuerySpec → expected SQL. no database.</span>
+    integration/    <span class="c">against loaded chinook. anchored on measured values.</span>
+    eval/           <span class="c">golden set + ablation runner</span>
+</pre>
+</section>
+
+<!-- ══════════════════ 8 ══════════════════ -->
+<section>
+  <h2><span class="num">08</span>Decisions taken on review</h2>
+  <p class="sub">17 Aug 2026 · five settled, one deferred</p>
+
+  <ol class="review">
+    <li><span class="rid ok">R1 ✓</span><div>
+      <h3>Join conditions: structured pairs</h3>
+      <p><code>on: [{from: track.album_id, to: album.album_id}]</code> rather than an expression to
+      parse. No grammar to write and no parser to get wrong; a malformed pair fails at load rather
+      than mid-query. Composite keys fall out as a longer list, and the shape matches Ossie's
+      <code>from_columns</code>/<code>to_columns</code>, so the exporter stays mechanical. Cost is
+      verbosity — the right thing to trade.</p>
+    </div></li>
+    <li><span class="rid ok">R2 ✓</span><div>
+      <h3>Rewrite, and surface the rewrite</h3>
+      <p>Where a correct rewrite exists, refusing is the worse answer — but the caller still has to
+      know the shape of their query changed. Each rewrite appends to a <code>rewrites[]</code>
+      record naming the metric, the fan-out edge that forced it, and the strategy applied.
+      Auditability is the reason <code>compiled_sql</code> is returned at all; an invisible rewrite
+      would undo it.</p>
+    </div></li>
+    <li><span class="rid ok">R3 ✓</span><div>
+      <h3>Metric selection: a permanent limit, not a gap</h3>
+      <p>This one doesn't get solved. It isn't really an agent defect — people are imprecise about
+      what they mean, and vocabulary and explicit communication aren't most users' strong suit, so
+      the gap between what was asked and what was meant never fully closes. <strong>grain guarantees
+      the answer is computed correctly; it does not guarantee the right question was asked.</strong>
+      <code>ai_context</code> narrows the gap and is expected to reduce these errors, not eliminate
+      them — so they're counted in their own column, where they can't masquerade as a failure of the
+      grain layer.</p>
+    </div></li>
+    <li><span class="rid ok">R4 ✓</span><div>
+      <h3>Keep five pipeline stages</h3>
+      <p>The separation is earning its keep. Each stage owns a distinct failure class, which is what
+      lets an error name a specific fix rather than a general one.</p>
+    </div></li>
+    <li><span class="rid ok">R5 ✓</span><div>
+      <h3>Keep <code>explain</code></h3>
+      <p>Worth the turn it costs, particularly during bring-up: it makes the compiled SQL and the
+      grain verdict visible before anything executes. Whether the agent reaches for it unprompted
+      stays worth measuring — but as information about the affordance, not a reason to drop it.</p>
+    </div></li>
+    <li><span class="rid">R6</span><div>
+      <h3>Second domain — deferred</h3>
+      <p>Picked once the design is finished. Worth keeping in view: the milestone-8 architecture test
+      is only meaningful if the engine hasn't already been quietly shaped around Chinook, so the
+      longer this waits the weaker the test gets.</p>
+    </div></li>
+  </ol>
+
+  <p class="sub" style="margin:30px 0 0">Also settled</p>
+  <ol class="review">
+    <li><span class="rid ok">S1 ✓</span><div>
+      <h3>Non-additivity is announced twice, asymmetrically</h3>
+      <p>The result flag is authoritative — computed for the actual query, so it can't go stale. But
+      arriving only there means the agent learns after asking, and one that skips result metadata
+      presents a clean 12-row table whose column silently sums to 5738.28 instead of 2328.60. Every
+      number in it is correct: <strong>the wrong number was prevented in the SQL and reintroduced at
+      the point of reading.</strong></p>
+      <p style="margin-top:9px">Publishing it per <em>(metric × dimension)</em> pair would grow
+      multiplicatively with the ontology. So <code>describe_ontology</code> states the
+      <strong>rule</strong> instead — <em>a metric grouped by a dimension reached through a
+      <code>many_to_many</code> link is non-additive</em> — one sentence, total coverage, unchanged
+      at 200 tables. The agent already sees the cardinalities; it only lacked the implication.</p>
+    </div></li>
+    <li><span class="rid ok">S2 ✓</span><div>
+      <h3>Progressive disclosure — not a problem yet</h3>
+      <p>Closed rather than deferred. Revisit only when a domain's ontology stops fitting
+      comfortably in context. The S1 resolution above was chosen partly so it doesn't bring that day
+      any closer.</p>
+    </div></li>
+  </ol>
+
+  <div class="callout">
+    <span class="k">Not in v1 — deliberately</span>
+    <p>Writeback and Actions · RDFS/OWL inference · entity resolution · vector search ·
+    multi-database federation · caching · row-level permissions.</p>
+    <p>And specifically: <strong>provenance, knowledge_level, bitemporal validity and contradiction
+    handling.</strong> Those are the Knowledge Graph Engine's core machinery, and they're absent here
+    because one trusted database means one provenance. That omission is the seam where the two
+    projects would converge.</p>
+  </div>
+</section>
+
+<footer>
+  grain · Ontology Engine build 01 · design at Projects/Ontology Engine/grain/Design.md
+</footer>
+
+</div>
