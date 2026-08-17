@@ -2096,6 +2096,15 @@ subquery must apply exactly the same joins, and a second direct-only copy of thi
 loop would silently drop `through` and `recursive` edges from rewritten metrics:
 
 ```python
+def _apply_edges(stmt: Select, metadata: MetaData, edges: list[Edge]) -> Select:
+    """Apply a specific list of edges. Task 13's metric subquery passes only the
+    prefix reaching its grain; the outer query passes the whole path."""
+    for edge in edges:
+        stmt = _apply_edge(stmt, metadata, edge)
+        stmt = _apply_object_joins(stmt, metadata, edge.to_object)
+    return stmt
+
+
 def _apply_path(stmt: Select, metadata: MetaData, rq: ResolvedQuery) -> Select:
     """Apply every edge on the walked path, plus each target's object joins.
 
@@ -2429,8 +2438,13 @@ def _aggregate_then_join(
     sub = select(*keys, _metric_expr(mp.metric).label(mp.metric.name))
     sub = sub.select_from(metadata.tables[rq.root.primary])
     sub = _apply_object_joins(sub, metadata, rq.root)
-    sub = _apply_path(sub, metadata, rq)   # C2: same joins as the outer query —
-                                           # never a direct-only copy of the loop
+    # C10 (found in Task 8): apply ONLY the prefix that reaches the metric's grain,
+    # never the whole path. Applying downstream fanning edges here would replicate
+    # the grain's rows inside the very subquery built to avoid that — the bug this
+    # rewrite exists to fix, reintroduced one level down. `_apply_path` must take a
+    # prefix argument, or a `_apply_edges(stmt, metadata, edges)` helper is used.
+    prefix = path_to_table(rq, mp.metric.grain) or []
+    sub = _apply_edges(sub, metadata, prefix)
     sub = sub.group_by(*[_property_column(metadata, rp) for rp in rq.group_by]).subquery()
 
     onclause = and_(
