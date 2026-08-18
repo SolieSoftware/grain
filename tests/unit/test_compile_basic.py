@@ -37,6 +37,18 @@ def test_many_to_one_hop_becomes_a_join(chinook_lite, lite_metadata):
     sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
                 traverse=[Hop(link="Customer_SupportRep")])
     assert "JOIN employee" in sql
+    on_clause = sql.split("JOIN employee")[1].split("WHERE")[0]
+    assert "customer.support_rep_id" in on_clause
+    assert "employee.employee_id" in on_clause
+
+
+def test_multiple_filters_are_all_present_in_the_where_clause(chinook_lite, lite_metadata):
+    sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
+                filters=[Filter(property="country", op="eq", value="Brazil"),
+                         Filter(property="country", op="ne", value="France")])
+    where = sql.split("WHERE")[1]
+    assert "Brazil" in where
+    assert "France" in where
 
 
 def test_limit_is_applied(chinook_lite, lite_metadata):

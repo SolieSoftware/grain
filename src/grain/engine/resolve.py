@@ -30,11 +30,12 @@ class ResolvedProperty:
     prop: Property
 
 
-@dataclass(frozen=True)
+@dataclass
 class ResolvedFilter:
     property: ResolvedProperty
     op: FilterOp
     value: Any
+    hops: list[LinkType] = field(default_factory=list)
 
 
 @dataclass
@@ -78,6 +79,28 @@ def _property(obj: ObjectType, name: str) -> ResolvedProperty:
     return ResolvedProperty(object=obj, name=name, prop=obj.properties[name])
 
 
+def _resolve_filter(
+    spec_filter: Any, root: ObjectType, onto: Ontology
+) -> ResolvedFilter:
+    """A filter's property is either bare (`country`, on the root) or dotted
+    (`Customer_Invoices.total`, one declared hop off the root). The dotted form
+    never traverses more than one hop — it names a link, not a path — so the
+    grain/EXISTS machinery downstream only ever sees a single-element `hops`."""
+    name = spec_filter.property
+    if "." not in name:
+        return ResolvedFilter(_property(root, name), spec_filter.op, spec_filter.value, [])
+    link_name, _, prop_name = name.partition(".")
+    if link_name not in onto.links:
+        raise UnknownName("link", link_name, suggest(link_name, list(onto.links)))
+    link = onto.links[link_name]
+    if link.from_ != root.name:
+        raise NoPath(root.name, link.to, [l.name for l in onto.links_from(root.name)])
+    target = _object(onto, link.to)
+    return ResolvedFilter(
+        _property(target, prop_name), spec_filter.op, spec_filter.value, [link]
+    )
+
+
 def resolve(spec: QuerySpec, onto: Ontology) -> ResolvedQuery:
     root = _object(onto, spec.object)
 
@@ -99,9 +122,7 @@ def resolve(spec: QuerySpec, onto: Ontology) -> ResolvedQuery:
         path.append(Edge(link=link, from_object=current, to_object=target))
         current = target
 
-    filters = [
-        ResolvedFilter(_property(root, f.property), f.op, f.value) for f in spec.filters
-    ]
+    filters = [_resolve_filter(f, root, onto) for f in spec.filters]
     group_by = [_property(root, key) for key in spec.group_by]
 
     metrics: list[Metric] = []
