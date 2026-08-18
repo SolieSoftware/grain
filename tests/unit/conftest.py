@@ -87,6 +87,10 @@ metrics:
     grain: track
     expr: "count(distinct track.track_id)"
     type: integer
+  playlist_count:
+    grain: playlist
+    expr: "count(distinct playlist.playlist_id)"
+    type: integer
 """
 
 
