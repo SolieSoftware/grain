@@ -65,3 +65,17 @@ def test_dotted_filter_on_an_untraversed_link_does_not_cartesian(chinook_lite, l
     assert "EXISTS" in sql.upper()
     assert "FROM customer, employee" not in " ".join(sql.split())
 
+
+def test_filtering_on_a_link_that_is_also_traversed_still_compiles(chinook_lite,
+                                                                   lite_metadata):
+    """The EXISTS names `invoice`, and so does the traversal — SQLAlchemy's
+    auto-correlation then stripped `invoice` out of the EXISTS, leaving it with
+    no FROM at all and raising InvalidRequestError at compile time. The EXISTS
+    now states its correlation explicitly, so only the root is correlatable."""
+    sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
+                traverse=[Hop(link="Customer_Invoices")],
+                filters=[Filter(property="Customer_Invoices.total", op="gt", value=5)])
+    exists = sql.upper().split("EXISTS")[1]
+    assert "FROM INVOICE" in exists  # the target stays inside the EXISTS
+    assert "FROM CUSTOMER" not in exists  # the root does not: it is correlated
+
