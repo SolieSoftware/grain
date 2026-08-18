@@ -33,7 +33,7 @@ def test_non_additive_query_is_still_answered_not_refused(chinook_lite):
     plan = plan_for(chinook_lite, object="Playlist", group_by=["name"],
                     metrics=["revenue"],
                     traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")])
-    assert plan.metric_plans[0].strategy in ("inline", "aggregate_then_join")
+    assert plan.metric_plans[0].strategy == "inline"
     assert plan.additive is False
 
 
@@ -55,6 +55,41 @@ def test_metrics_at_different_grains_are_isolated_from_each_other(chinook_lite):
     grains = {mp.metric.name: mp.metric.grain for mp in plan.metric_plans}
     assert grains == {"revenue": "invoice_line", "track_count": "track"}
     assert len(plan.metric_plans) == 2
+
+
+def test_additivity_is_per_metric_not_per_query(chinook_lite):
+    """A many_to_many in one metric's prefix must not mark a different metric
+    non-additive by way of a shared, latching flag — additivity is computed
+    from each metric's own prefix.
+
+    Both metrics here turn out non-additive, but for the same reason, not by
+    contamination: `revenue`'s grain (invoice_line) enters scope only at the
+    second hop, so its prefix is [Playlist_Tracks, Track_InvoiceLines] — it
+    crosses the many_to_many. `track_count`'s grain (track) enters scope at
+    the *first* hop already, so its own prefix is just [Playlist_Tracks] —
+    which is itself the many_to_many link. Grouping distinct track counts by
+    playlist is correct per playlist, but a track that sits in more than one
+    playlist is counted once in each, so the column still doesn't sum to the
+    true distinct track total. There is no fanning path here whose prefix
+    avoids Playlist_Tracks, so this fixture can't exercise the "different
+    metric stays additive" case directly -- that's covered by
+    test_additive_stays_true_without_a_many_to_many, which uses a query with
+    no many_to_many on the path at all.
+    """
+    plan = plan_for(chinook_lite, object="Playlist", group_by=["name"],
+                    metrics=["revenue", "track_count"],
+                    traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")])
+    by_name = {mp.metric.name: mp for mp in plan.metric_plans}
+
+    assert by_name["revenue"].additive is False
+    assert by_name["revenue"].non_additive_reason is not None
+    assert "Playlist_Tracks" in by_name["revenue"].non_additive_reason
+
+    assert by_name["track_count"].additive is False
+    assert by_name["track_count"].non_additive_reason is not None
+    assert "Playlist_Tracks" in by_name["track_count"].non_additive_reason
+
+    assert plan.additive is False          # derived: any non-additive
 
 
 def test_a_branching_path_cannot_be_expressed(chinook_lite):

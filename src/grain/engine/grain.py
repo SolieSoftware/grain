@@ -18,13 +18,27 @@ class MetricPlan:
     metric: Metric
     strategy: Strategy
     forced_by: str | None = None
+    additive: bool = True
+    non_additive_reason: str | None = None
 
 
 @dataclass
 class GrainPlan:
     metric_plans: list[MetricPlan] = field(default_factory=list)
-    additive: bool = True
-    non_additive_reason: str | None = None
+
+    @property
+    def additive(self) -> bool:
+        """False if ANY requested metric is non-additive. Callers that need to
+        know which one must read metric_plans."""
+        return all(mp.additive for mp in self.metric_plans)
+
+    @property
+    def non_additive_reason(self) -> str | None:
+        """The first reason, for a single-line caveat. Full detail per metric."""
+        return next(
+            (mp.non_additive_reason for mp in self.metric_plans if mp.non_additive_reason),
+            None,
+        )
 
 
 def path_to_table(rq: ResolvedQuery, table: str) -> list[Edge] | None:
@@ -114,30 +128,38 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
         # this metric's own rows intact and so is harmless for it.
         downstream = rq.path[len(prefix):]
         fanning = [e for e in downstream if e.link.fans_out]
-        if not fanning:
-            plan.metric_plans.append(MetricPlan(metric=metric, strategy="inline"))
-        else:
-            plan.metric_plans.append(
-                MetricPlan(
-                    metric=metric,
-                    strategy="aggregate_then_join",
-                    forced_by=fanning[0].link.name,
-                )
-            )
+        strategy: Strategy = "inline" if not fanning else "aggregate_then_join"
+        forced_by = fanning[0].link.name if fanning else None
 
         # Additivity is orthogonal to strategy and to fan-out: it asks whether
         # the *group-by keys* (which live on the root) overlap, not whether
         # this metric's own rows would double-count. A many_to_many anywhere
         # on the path from the grain back to the root — `prefix` — means the
         # same grain row can belong to more than one group, so the column
-        # will not sum to the total even though every group is correct.
+        # will not sum to the total even though every group is correct. This
+        # is a property of THIS metric's own prefix, not of the query as a
+        # whole — a different metric's grain can sit on an entirely different,
+        # all-one-to-many prefix and remain perfectly additive.
+        additive = True
+        non_additive_reason: str | None = None
         for edge in prefix:
-            if edge.link.cardinality == "many_to_many" and plan.additive:
-                plan.additive = False
-                plan.non_additive_reason = (
+            if edge.link.cardinality == "many_to_many":
+                additive = False
+                non_additive_reason = (
                     f"'{metric.name}' is grouped across '{edge.link.name}', which is "
                     f"many_to_many. Each group is correct, but the groups overlap — "
                     f"this column will not sum to the total."
                 )
+                break
+
+        plan.metric_plans.append(
+            MetricPlan(
+                metric=metric,
+                strategy=strategy,
+                forced_by=forced_by,
+                additive=additive,
+                non_additive_reason=non_additive_reason,
+            )
+        )
 
     return plan
