@@ -9,7 +9,7 @@ objects:
   Customer:
     primary: customer
     properties:
-      country: {column: customer.country, type: string}
+      country: {column: customer.country, type: string, nullable: true}
   Invoice:
     primary: invoice
     properties:
@@ -34,7 +34,7 @@ objects:
   Playlist:
     primary: playlist
     properties:
-      name: {column: playlist.name, type: string}
+      name: {column: playlist.name, type: string, nullable: true}
 links:
   Customer_Invoices:
     from: Customer
@@ -102,48 +102,56 @@ metrics:
 @pytest.fixture(scope="session")
 def lite_metadata():
     md = MetaData()
+    # Nullability mirrors the real chinook schema, column for column. It is not
+    # decoration: `_key_is_nullable` reads the REFLECTED flag to choose between
+    # `=` and `IS NOT DISTINCT FROM` when rejoining a pre-aggregated metric, and
+    # the loader refuses any declaration that under-states it. A fixture where
+    # everything defaulted to nullable would exercise only one of those branches
+    # and would misreport which properties may legally declare `nullable: false`.
     Table(
         "customer",
         md,
-        Column("customer_id", Integer),
-        Column("country", String),
+        Column("customer_id", Integer, nullable=False),
+        Column("country", String),  # genuinely nullable in chinook
         Column("support_rep_id", Integer),
     )
     Table(
         "invoice",
         md,
-        Column("invoice_id", Integer),
-        Column("customer_id", Integer),
-        Column("total", Numeric),
-        Column("invoice_date", DateTime),
+        Column("invoice_id", Integer, nullable=False),
+        Column("customer_id", Integer, nullable=False),
+        Column("total", Numeric, nullable=False),
+        Column("invoice_date", DateTime, nullable=False),
     )
     Table(
         "invoice_line",
         md,
-        Column("invoice_line_id", Integer),
-        Column("invoice_id", Integer),
-        Column("unit_price", Numeric),
-        Column("quantity", Integer),
-        Column("track_id", Integer),
+        Column("invoice_line_id", Integer, nullable=False),
+        Column("invoice_id", Integer, nullable=False),
+        Column("unit_price", Numeric, nullable=False),
+        Column("quantity", Integer, nullable=False),
+        Column("track_id", Integer, nullable=False),
     )
     Table(
         "employee",
         md,
-        Column("employee_id", Integer),
+        Column("employee_id", Integer, nullable=False),
         Column("reports_to", Integer),
-        Column("last_name", String),
+        Column("last_name", String, nullable=False),
         Column("department_id", Integer),
     )
     Table(
         "department",
         md,
-        Column("department_id", Integer),
-        Column("name", String),
+        Column("department_id", Integer, nullable=False),
+        Column("name", String, nullable=False),
     )
-    Table("track", md, Column("track_id", Integer), Column("name", String),
-          Column("album_id", Integer))
-    Table("playlist", md, Column("playlist_id", Integer), Column("name", String))
-    Table("playlist_track", md, Column("playlist_id", Integer), Column("track_id", Integer))
+    Table("track", md, Column("track_id", Integer, nullable=False),
+          Column("name", String, nullable=False), Column("album_id", Integer))
+    Table("playlist", md, Column("playlist_id", Integer, nullable=False),
+          Column("name", String))  # playlist.name is nullable in chinook
+    Table("playlist_track", md, Column("playlist_id", Integer, nullable=False),
+          Column("track_id", Integer, nullable=False))
     return md
 
 

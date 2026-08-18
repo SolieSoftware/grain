@@ -6,7 +6,7 @@ objects:
     primary: artist
     title_property: name
     properties:
-      name: {column: artist.name, type: string}
+      name: {column: artist.name, type: string, nullable: true}
 
   Album:
     primary: album
@@ -39,19 +39,19 @@ objects:
     primary: genre
     title_property: name
     properties:
-      name: {column: genre.name, type: string}
+      name: {column: genre.name, type: string, nullable: true}
 
   MediaType:
     primary: media_type
     title_property: name
     properties:
-      name: {column: media_type.name, type: string}
+      name: {column: media_type.name, type: string, nullable: true}
 
   Playlist:
     primary: playlist
     title_property: name
     properties:
-      name: {column: playlist.name, type: string}
+      name: {column: playlist.name, type: string, nullable: true}
 
   Customer:
     primary: customer

@@ -11,6 +11,11 @@ from .ontology import LinkType, Metric, ObjectType, Ontology, Property
 from .spec import FilterOp, OrderBy, QuerySpec
 
 
+def _unique(names: list[str]) -> list[str]:
+    """Duplicates removed, first occurrence kept, order otherwise untouched."""
+    return list(dict.fromkeys(names))
+
+
 def suggest(name: str, candidates: list[str], limit: int = 3) -> list[str]:
     close = difflib.get_close_matches(name, candidates, n=limit, cutoff=0.5)
     return close or sorted(candidates)[:limit]
@@ -123,10 +128,17 @@ def resolve(spec: QuerySpec, onto: Ontology) -> ResolvedQuery:
         current = target
 
     filters = [_resolve_filter(f, root, onto) for f in spec.filters]
-    group_by = [_property(root, key) for key in spec.group_by]
+
+    # Asking for one key, or one metric, twice means what asking once means,
+    # and a caller assembling a spec programmatically does it often. Left in,
+    # the duplicate becomes two identically-labelled SELECT columns and two
+    # identically-aliased subqueries, which SQLAlchemy rejects mid-compile — a
+    # crash on a request whose meaning was never in doubt. First occurrence
+    # wins, so the caller's own column order survives.
+    group_by = [_property(root, key) for key in _unique(spec.group_by)]
 
     metrics: list[Metric] = []
-    for name in spec.metrics:
+    for name in _unique(spec.metrics):
         if name not in onto.metrics:
             raise UnknownName("metric", name, suggest(name, list(onto.metrics)))
         metrics.append(onto.metrics[name])

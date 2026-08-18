@@ -79,3 +79,30 @@ def test_filtering_on_a_link_that_is_also_traversed_still_compiles(chinook_lite,
     assert "FROM INVOICE" in exists  # the target stays inside the EXISTS
     assert "FROM CUSTOMER" not in exists  # the root does not: it is correlated
 
+
+
+def test_filtering_across_a_self_referential_link_aliases_the_target(chinook_lite,
+                                                                     lite_metadata):
+    """`Employee_Manager` goes employee -> employee. Both sides of the link name
+    the same table, so correlating the root stripped the EXISTS of its only FROM
+    and every column in it bound to the OUTER row: `employees whose manager is
+    named X` compiled to `employees who ARE their own manager`. Wrong rows, no
+    error. The target is aliased, so the inner row has an identity of its own."""
+    sql = build(chinook_lite, lite_metadata, object="Employee", group_by=["last_name"],
+                filters=[Filter(property="Employee_Manager.last_name",
+                                op="eq", value="Peacock")])
+    exists = sql.upper().split("EXISTS")[1]
+    assert "FROM EMPLOYEE AS EMPLOYEE_1" in exists  # the alias, and a real FROM
+    # The correlated (outer) side keeps the bare table; only the inner side is
+    # aliased. Comparing employee.reports_to to employee.employee_id would ask
+    # for self-managing employees.
+    assert "EMPLOYEE.REPORTS_TO = EMPLOYEE_1.EMPLOYEE_ID" in exists
+    assert "EMPLOYEE_1.LAST_NAME = 'PEACOCK'" in exists
+
+
+def test_a_non_self_referential_exists_is_still_unaliased(chinook_lite, lite_metadata):
+    """The alias exists to separate two references to ONE table. Where there is
+    only one, it would be noise."""
+    sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
+                filters=[Filter(property="Customer_Invoices.total", op="gt", value=5)])
+    assert "AS invoice_1" not in sql

@@ -9,7 +9,6 @@ from sqlalchemy import (
     MetaData,
     Select,
     and_,
-    func,
     literal,
     literal_column,
     select,
@@ -21,7 +20,7 @@ from sqlalchemy.sql.selectable import CTE
 
 from .errors import FanOutRefused
 from .grain import GrainPlan, MetricPlan, path_to_table
-from .ontology import Metric, ObjectType
+from .ontology import ColumnRef, JoinPair, Metric, ObjectType
 from .resolve import Edge, ResolvedFilter, ResolvedProperty, ResolvedQuery
 
 
@@ -38,8 +37,12 @@ def _property_column(metadata: MetaData, rp: ResolvedProperty) -> Column[Any]:
     return _column(metadata, rp.prop.column.table, rp.prop.column.column)
 
 
-def _filter_clause(metadata: MetaData, rf: ResolvedFilter) -> ColumnElement[bool]:
-    col = _property_column(metadata, rf.property)
+def _filter_clause(
+    metadata: MetaData, rf: ResolvedFilter, col: ColumnElement[Any] | None = None
+) -> ColumnElement[bool]:
+    """`col` overrides which column the comparison binds to — needed when the
+    filter's table has been aliased inside an EXISTS."""
+    col = _property_column(metadata, rf.property) if col is None else col
     op = rf.op
     if op == "eq":
         return col == rf.value
@@ -250,51 +253,45 @@ def _exists_clause(metadata: MetaData, rf: ResolvedFilter) -> ColumnElement[bool
     it with no FROM at all and raising InvalidRequestError. Naming the
     correlated side (always the root, which the link's `from` columns live on)
     pins exactly one table as correlatable and leaves the target in place.
+
+    A SELF-REFERENTIAL link needs more than that. Its `from` and `to` name the
+    SAME table, so the correlated side and the target are one object and the
+    EXISTS is left with no FROM at all — every column reference in it binds to
+    the outer row, and `employees whose manager is named X` compiles to
+    `employees who are their own manager`. Wrong rows, no error, no alias to
+    tell them apart. So the target is aliased whenever it is also the
+    correlated table, giving the inner row an identity of its own.
     """
     link = rf.hops[0]
     target = metadata.tables[rf.property.prop.column.table]
     outer = {p.from_.table for p in (link.on_from if link.kind == "through" else link.on)}
+    inner = target.alias() if target.name in outer else target
+
+    def _to(ref: ColumnRef) -> ColumnElement[Any]:
+        """The INNER side of a join pair, read off the alias where there is one.
+
+        The mapping is positional, not by table name: for a self-referential
+        link both sides name the target, and only the `to` side belongs to the
+        inner row. Aliasing by name would alias the correlated side too and
+        correlate the EXISTS to nothing.
+        """
+        if ref.table == target.name:
+            return inner.columns[ref.column]
+        return _column(metadata, ref.table, ref.column)
+
+    def _pairs(pairs: list[JoinPair]) -> list[ColumnElement[bool]]:
+        return [_column(metadata, p.from_.table, p.from_.column) == _to(p.to) for p in pairs]
+
+    predicate = _filter_clause(metadata, rf, inner.columns[rf.property.prop.column.column])
     if link.kind == "through":
-        via = metadata.tables[link.via]
         sub = (
             select(1)
-            .select_from(via)
-            .join(
-                target,
-                and_(
-                    *[
-                        _column(metadata, p.from_.table, p.from_.column)
-                        == _column(metadata, p.to.table, p.to.column)
-                        for p in link.on_to
-                    ]
-                ),
-            )
-            .where(
-                and_(
-                    *[
-                        _column(metadata, p.from_.table, p.from_.column)
-                        == _column(metadata, p.to.table, p.to.column)
-                        for p in link.on_from
-                    ],
-                    _filter_clause(metadata, rf),
-                )
-            )
+            .select_from(metadata.tables[link.via])
+            .join(inner, and_(*_pairs(link.on_to)))
+            .where(and_(*_pairs(link.on_from), predicate))
         )
     else:
-        sub = (
-            select(1)
-            .select_from(target)
-            .where(
-                and_(
-                    *[
-                        _column(metadata, p.from_.table, p.from_.column)
-                        == _column(metadata, p.to.table, p.to.column)
-                        for p in link.on
-                    ],
-                    _filter_clause(metadata, rf),
-                )
-            )
-        )
+        sub = select(1).select_from(inner).where(and_(*_pairs(link.on), predicate))
     return sub.correlate(*[metadata.tables[name] for name in sorted(outer)]).exists()
 
 
@@ -343,18 +340,39 @@ def _metric_column(metric: Metric) -> ColumnElement[Any]:
     return _metric_expr(metric).label(metric.name)
 
 
+def _key_is_nullable(metadata: MetaData, rp: ResolvedProperty) -> bool:
+    """Can this group key ever be NULL? Three independent sources say yes.
+
+    The DATABASE is authoritative and is checked first: a hand-written
+    `nullable: false` over a genuinely nullable column is a wrong answer
+    waiting to happen, and while the loader now refuses to load one, nothing
+    downstream should have to trust that it did. A declaration may only ever
+    ADD nullability here, never take it away.
+
+    A `via` onto a `kind: left` join makes the property nullable however the
+    column is defined — the outer join manufactures NULLs of its own for every
+    unmatched row.
+    """
+    if rp.prop.nullable or _property_column(metadata, rp).nullable:
+        return True
+    join = rp.object.joins.get(rp.prop.via) if rp.prop.via else None
+    return join is not None and join.kind == "left"
+
+
 def _key_match(
-    outer: Column[Any], inner: ColumnElement[Any], rp: ResolvedProperty
+    metadata: MetaData, outer: Column[Any], inner: ColumnElement[Any], rp: ResolvedProperty
 ) -> ColumnElement[bool]:
     """Match one outer group key against the metric subquery's copy of it.
 
     A nullable key needs `IS NOT DISTINCT FROM`: `country = country` is NULL,
-    not true, when both sides are NULL, so every row whose key is NULL would
-    miss its own group and coalesce to zero — a silent undercount of exactly
-    the kind this engine exists to make unreachable. A key the ontology
-    declares NOT NULL uses plain equality, which more optimisers can hash.
+    not true, when both sides are NULL, so every row whose key is NULL misses
+    its own group — a silent undercount of exactly the kind this engine exists
+    to make unreachable. A key that is provably NOT NULL uses plain equality,
+    which more optimisers can hash.
     """
-    return outer.is_not_distinct_from(inner) if rp.prop.nullable else outer == inner
+    if _key_is_nullable(metadata, rp):
+        return outer.is_not_distinct_from(inner)
+    return outer == inner
 
 
 def _aggregate_then_join(
@@ -389,7 +407,7 @@ def _aggregate_then_join(
     joined = sub.subquery(name=f"{mp.metric.name}_at_{mp.metric.grain}")
 
     matches = [
-        _key_match(_property_column(metadata, rp), joined.c[rp.name], rp)
+        _key_match(metadata, _property_column(metadata, rp), joined.c[rp.name], rp)
         for rp in rq.group_by
     ]
     # No keys means the subquery is a single row, so `ON true` is the whole
@@ -397,7 +415,16 @@ def _aggregate_then_join(
     onclause = and_(*matches) if matches else true()
     return (
         stmt.join(joined, onclause, isouter=True)
-        .add_columns(func.coalesce(joined.c[mp.metric.name], 0).label(mp.metric.name))
+        # The value is taken straight, NOT wrapped in coalesce(..., 0). The
+        # outer key set is a subset of the subquery's — both start at the same
+        # root under the same filters, and the outer's extra edges are inner
+        # joins, which can only drop keys, never invent one. So a miss is not a
+        # group with no facts; it is a key that failed to match a key it should
+        # have matched, and the only way that happens is a broken comparison.
+        # A zero there would repaint that as a plausible number and hide it;
+        # NULL leaves it visible. (It would also be a type error the moment a
+        # metric is not numeric.)
+        .add_columns(joined.c[mp.metric.name].label(mp.metric.name))
         # The joined value is not an aggregate of the outer query, so it has to
         # be grouped. It is functionally determined by the keys already grouped
         # (one subquery row per key tuple), so this cannot split a group.

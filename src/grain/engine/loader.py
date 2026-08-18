@@ -9,11 +9,28 @@ import yaml
 from sqlalchemy import MetaData
 
 from .errors import OntologyError
-from .ontology import ColumnRef, Metric, Ontology
+from .ontology import ColumnRef, Metric, ObjectType, Ontology, Property
 
 # `[a-z_]` as the first character of each half deliberately excludes digits, so a
 # decimal literal like `0.5` can never match as a `table.column` token.
 METRIC_COLUMN_TOKEN = re.compile(r"\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b")
+
+# A bare word in a metric expression, once the qualified tokens are masked out.
+# The lookbehind keeps the exponent of a float literal (`1.5e3`) from reading as
+# an identifier.
+BARE_WORD = re.compile(r"(?<![a-z0-9_.])[a-z_][a-z0-9_]*")
+
+SQL_WORDS: frozenset[str] = frozenset(
+    {
+        "all", "and", "as", "asc", "between", "by", "case", "cast", "desc",
+        "distinct", "else", "end", "false", "filter", "in", "interval", "is",
+        "like", "not", "null", "or", "order", "over", "partition", "then",
+        "true", "when", "where",
+    }
+)
+"""Words that may legally stand unqualified in an aggregate expression. A
+function name is recognised structurally (it is followed by `(`), so this holds
+only the operators and literals — never a column."""
 
 
 # Exists solely so the `on:` join-condition key survives parsing as a string,
@@ -81,13 +98,67 @@ def _require_column(metadata: MetaData, ref: ColumnRef, context: str) -> None:
         )
 
 
+def _check_nullability(
+    obj: ObjectType, prop_name: str, prop: Property, metadata: MetaData
+) -> None:
+    """A declaration may ADD nullability; it may never take it away.
+
+    `compile.py` reads this flag to choose between `=` and `IS NOT DISTINCT
+    FROM` when it rejoins a pre-aggregated metric onto its group keys. Under a
+    plain `=`, a NULL key silently fails to match its own group — the wrong
+    number, at the right magnitude, with no error. A hand-written `nullable:
+    false` over a column the database says is nullable is therefore not a
+    documentation slip; it is a live wrong answer waiting for one NULL row. It
+    fails here, at load, which is what this loader is for.
+
+    A property reached through a `kind: left` join is nullable whatever it
+    declares and whatever its column says: the outer join manufactures NULLs
+    for unmatched rows all on its own.
+    """
+    if prop.nullable:
+        return
+    ctx = f"object '{obj.name}' property '{prop_name}'"
+    if metadata.tables[prop.column.table].columns[prop.column.column].nullable:
+        raise OntologyError(
+            f"{ctx} declares 'nullable: false', but column "
+            f"'{prop.column.qualified}' is nullable in the database. A "
+            f"declaration may add nullability, never remove it."
+        )
+    if prop.via is not None and obj.joins[prop.via].kind == "left":
+        raise OntologyError(
+            f"{ctx} declares 'nullable: false', but it is reached through the "
+            f"left join '{prop.via}', which yields NULL for every unmatched row."
+        )
+
+
 def _validate_metric_expr(metric: Metric, metadata: MetaData) -> None:
-    """Every table.column token must belong to the metric's own grain table.
+    """Every table.column token must belong to the metric's own grain table,
+    and every column reference must be qualified.
 
     This is what makes relocating the expression into a subquery grouped at its
-    grain provably safe, without parsing the arithmetic.
+    grain provably safe, without parsing the arithmetic — and it is also what
+    makes rendering the expression as raw SQL safe at all.
+
+    Unqualified is not merely untidy: a bare `sum(unit_price)` binds to a
+    DIFFERENT column depending on the strategy chosen for it. Inline, the FROM
+    holds the whole walked path and the name resolves against whichever table
+    happens to own it; in a subquery the FROM holds only the prefix reaching
+    the grain. Same declared metric, two numbers, no error either way.
     """
     _require_table(metadata, metric.grain, f"metric '{metric.name}'")
+    masked = METRIC_COLUMN_TOKEN.sub(" ", metric.expr)
+    for match in BARE_WORD.finditer(masked):
+        word = match.group(0)
+        if masked[match.end():].lstrip().startswith("("):
+            continue  # a function name, not a column
+        if word in SQL_WORDS:
+            continue
+        raise OntologyError(
+            f"metric '{metric.name}' references '{word}' unqualified. Every "
+            f"column in a metric expression must be written as "
+            f"'{metric.grain}.{word}' — an unqualified name binds to a "
+            f"different column depending on how the metric is compiled."
+        )
     for table, column in METRIC_COLUMN_TOKEN.findall(metric.expr):
         if table != metric.grain:
             raise OntologyError(
@@ -116,6 +187,17 @@ def validate(onto: Ontology, metadata: MetaData) -> None:
                     f"{ctx} property '{prop_name}': via '{prop.via}' is not a "
                     f"declared join. Declared joins: {sorted(obj.joins)}"
                 )
+            if prop_name in onto.metrics:
+                # A group key and a metric are labelled by their own names in
+                # the same SELECT, and the metric subquery exposes both. Equal
+                # names collide there and SQLAlchemy raises mid-compile, on a
+                # query the caller had every reason to think was legal.
+                raise OntologyError(
+                    f"{ctx} property '{prop_name}' has the same name as a "
+                    f"declared metric. A group key and a metric share one "
+                    f"namespace in the emitted SELECT — rename one of them."
+                )
+            _check_nullability(obj, prop_name, prop, metadata)
 
     for link in onto.links.values():
         ctx = f"link '{link.name}'"

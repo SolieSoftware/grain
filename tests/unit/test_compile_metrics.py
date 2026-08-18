@@ -154,7 +154,16 @@ def test_an_inline_sibling_gives_a_keyless_rewrite_something_to_hang_on(
     sql = build(chinook_lite, lite_metadata, object="Customer",
                 metrics=["revenue", "customer_count"], traverse=BOTH_HOPS)
     assert "ON true" in sql
-    assert "coalesce" in sql.lower()
+    assert "customer_count_at_customer.customer_count AS customer_count" in sql
+
+
+def test_a_rejoined_metric_is_never_wrapped_in_coalesce(chinook_lite, lite_metadata):
+    """The outer key set is a subset of the subquery's, so a miss can only be a
+    key that failed to match one it should have. `coalesce(..., 0)` would repaint
+    that as a plausible number; NULL leaves the fault visible."""
+    sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
+                metrics=["invoice_total"], traverse=BOTH_HOPS)
+    assert "coalesce" not in sql.lower()
 
 
 def test_recursive_edge_in_a_metric_prefix_gets_its_own_cte_name(
@@ -183,3 +192,64 @@ def test_repeating_one_recursive_link_still_names_each_cte_once(
     defined = re.findall(r"(employee_manager_cte\w*)\([a-z_, ]+\) AS ", sql)
     assert len(defined) == 2, sql
     assert len(set(defined)) == 2, defined
+
+
+def test_a_nullable_group_key_rejoins_null_safely(chinook_lite, lite_metadata):
+    """`customer.country` is nullable, so `=` would leave every NULL-country row
+    unmatched against its own group — the metric would read NULL for a group
+    that has a perfectly good number."""
+    sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
+                metrics=["invoice_total"], traverse=BOTH_HOPS)
+    assert "IS NOT DISTINCT FROM" in sql.upper()
+
+
+def test_a_not_null_group_key_rejoins_with_plain_equality(
+    lite_with_employee_customers, lite_metadata
+):
+    """`employee.last_name` is NOT NULL in the schema, so the null-safe operator
+    buys nothing and costs the optimiser a hash join."""
+    sql = build(lite_with_employee_customers, lite_metadata, object="Employee",
+                group_by=["last_name"], metrics=["customer_count"],
+                traverse=[Hop(link="Employee_Manager"), Hop(link="Employee_Customers"),
+                          Hop(link="Customer_Invoices")])
+    assert "IS NOT DISTINCT FROM" not in sql.upper()
+    assert "employee.last_name = customer_count_at_customer.last_name" in sql
+
+
+def test_reflected_nullability_overrides_a_declaration_that_understates_it(
+    chinook_lite, lite_metadata
+):
+    """Defence in depth for CRITICAL-1. The loader refuses a `nullable: false`
+    over a nullable column, but nothing downstream should have to trust that it
+    did — an ontology built in memory bypasses the loader entirely. The
+    reflected column is authoritative; a declaration may only ADD nullability.
+    """
+    from grain.engine.ontology import Property
+
+    obj = chinook_lite.objects["Customer"]
+    lying = obj.model_copy(
+        update={
+            "properties": {
+                **obj.properties,
+                "country": Property(column="customer.country", type="string",
+                                    nullable=False),
+            }
+        }
+    )
+    onto = chinook_lite.model_copy(
+        update={"objects": {**chinook_lite.objects, "Customer": lying}}
+    )
+    sql = build(onto, lite_metadata, object="Customer", group_by=["country"],
+                metrics=["invoice_total"], traverse=BOTH_HOPS)
+    assert "IS NOT DISTINCT FROM" in sql.upper()
+
+
+def test_duplicate_metrics_and_keys_are_answered_not_crashed(chinook_lite, lite_metadata):
+    """Two identically-aliased subqueries, or two identically-labelled columns,
+    make SQLAlchemy raise mid-compile on a spec whose meaning was never unclear."""
+    sql = build(chinook_lite, lite_metadata, object="Customer",
+                group_by=["country", "country"],
+                metrics=["invoice_total", "invoice_total"], traverse=BOTH_HOPS)
+    assert sql.count(") AS invoice_total_at_invoice") == 1  # one subquery, not two
+    assert sql.count("AS country") == 2  # outer column and the subquery's copy
+    assert sql.count("AS invoice_total ") == 2  # ditto, one metric not two
