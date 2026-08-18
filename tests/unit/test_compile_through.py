@@ -40,3 +40,28 @@ def test_filter_across_a_through_link_uses_exists_via_junction(chinook_lite, lit
     assert "JOIN track" not in outer
     assert "JOIN playlist_track" not in outer
 
+
+def test_dotted_filter_on_an_untraversed_link_does_not_cartesian(chinook_lite, lite_metadata):
+    """A non-fanning dotted filter used to take the plain-WHERE path, leaving its
+    table unjoined in FROM. SQLAlchemy then inferred it, producing a silent
+    cartesian product — 24 rows where 10 were correct. Every dotted filter now
+    goes through EXISTS, which carries its own join condition.
+
+    NOTE on the SAWarning: SQLAlchemy's cartesian-product linter only warns
+    when a statement is compiled through an actual `Connection.execute()` —
+    `Connection._execute_clauseelement` ORs in `WARN_LINTING` on top of the
+    dialect's `compiler_linting`, which a bare `stmt.compile()` (what this
+    database-free test does, via `sql_text`) never sets. Verified directly:
+    compiling the *old*, buggy `FROM customer, employee` shape with
+    `stmt.compile(dialect=create_engine("postgresql+psycopg://...").dialect,
+    compile_kwargs={"literal_binds": True})` still raises no warning — only a
+    live `Connection` does. So "no SAWarning" isn't assertable here without a
+    database; the structural assertions below (no bare comma-join, EXISTS
+    present) are the database-free proxy for it.
+    """
+    sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
+                filters=[Filter(property="Customer_SupportRep.last_name",
+                                op="eq", value="Peacock")])
+    assert "EXISTS" in sql.upper()
+    assert "FROM customer, employee" not in " ".join(sql.split())
+

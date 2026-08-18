@@ -137,8 +137,16 @@ def _apply_path(stmt: Select[Any], metadata: MetaData, rq: ResolvedQuery) -> Sel
 
 
 def _exists_clause(metadata: MetaData, rf: ResolvedFilter) -> ColumnElement[bool]:
-    """A filter across a fanning edge, as `EXISTS` rather than a join — a join
-    would return one row per matching child, silently multiplying the parent.
+    """Every dotted filter, as `EXISTS` rather than a join-plus-WHERE.
+
+    Across a fanning hop, a join would return one row per matching child,
+    silently multiplying the parent. Across a non-fanning (many_to_one) hop
+    there is no multiplying risk, but the hop's target table is never
+    guaranteed to be in FROM (it only lands there if the same link also
+    appears in `traverse`) — a plain WHERE on an unjoined table becomes an
+    implicit, unconditional cartesian product that SQLAlchemy silently adds
+    to FROM. EXISTS carries its own join condition, so that table can never
+    appear unjoined.
 
     `direct`: correlate straight to the target table. `through`: correlate via
     the junction table so it, like everywhere else, never surfaces to the
@@ -197,12 +205,20 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
     stmt = _apply_object_joins(stmt, metadata, rq.root)
     stmt = _apply_path(stmt, metadata, rq)
 
-    # A filter across a fanning edge (one_to_many / many_to_many) must not
-    # become a join — that returns one row per matching child and silently
-    # multiplies the parent. Route those to EXISTS instead; everything else
-    # is a plain WHERE.
-    plain = [rf for rf in rq.filters if not any(l.fans_out for l in rf.hops)]
-    existential = [rf for rf in rq.filters if any(l.fans_out for l in rf.hops)]
+    # Every dotted filter (one with a hop) goes through EXISTS, fanning or
+    # not. A fanning hop as a plain join would return one row per matching
+    # child, multiplying the parent. A non-fanning (many_to_one) hop has no
+    # such risk on its own, but its target table is only ever joined into
+    # FROM when that same link also appears in `traverse` — left as a plain
+    # WHERE otherwise, the unjoined table still gets into the query via
+    # SQLAlchemy's implicit FROM inference, an unconditional cartesian
+    # product that runs without error and returns plausible but wrong rows.
+    # EXISTS carries its own join condition inside the subquery, so that
+    # unjoined-table cartesian is unconstructible rather than merely
+    # unlikely. A bare (non-dotted) filter has no hop and stays a plain
+    # WHERE — there is nothing to correlate.
+    plain = [rf for rf in rq.filters if not rf.hops]
+    existential = [rf for rf in rq.filters if rf.hops]
 
     if plain:
         stmt = stmt.where(and_(*[_filter_clause(metadata, rf) for rf in plain]))
