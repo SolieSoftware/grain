@@ -20,6 +20,11 @@ objects:
       quantity: {column: invoice_line.quantity, type: integer}
   Employee:
     primary: employee
+    joins:
+      department:
+        to: department
+        kind: left
+        on: [{from: employee.department_id, to: department.department_id}]
     properties:
       last_name: {column: employee.last_name, type: string}
   Track:
@@ -127,6 +132,13 @@ def lite_metadata():
         Column("employee_id", Integer),
         Column("reports_to", Integer),
         Column("last_name", String),
+        Column("department_id", Integer),
+    )
+    Table(
+        "department",
+        md,
+        Column("department_id", Integer),
+        Column("name", String),
     )
     Table("track", md, Column("track_id", Integer), Column("name", String),
           Column("album_id", Integer))

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Column, MetaData, Select, and_, select
+from sqlalchemy import Column, MetaData, Select, and_, literal, select
+from sqlalchemy.dialects.postgresql import array
 from sqlalchemy.sql import ColumnElement
+from sqlalchemy.sql.selectable import CTE
 
 from .grain import GrainPlan
 from .ontology import ObjectType
@@ -58,6 +60,50 @@ def _edge_onclause(metadata: MetaData, edge: Edge) -> ColumnElement[bool]:
             for p in pairs
         ]
     )
+
+
+def _recursive_cte(metadata: MetaData, edge: Edge) -> CTE:
+    """A self-referential link becomes a depth-bounded recursive CTE.
+
+    `depth` bounds runaway recursion (`edge.link.max_depth`); `path` carries
+    every visited id so a cycle in the data terminates the walk instead of
+    looping forever. The two guard different failure modes: `max_depth` alone
+    still lets a two-node cycle spin until the bound is hit; `path` alone
+    still needs a floor in case future data has no cycle but is simply deep.
+
+    The base case anchors at the top of the hierarchy (`child_col IS NULL` —
+    e.g. `reports_to IS NULL`) and walks downward, matching the direction the
+    integration anchor (`test_employee_hierarchy_is_three_levels`) measures.
+    """
+    table = metadata.tables[edge.to_object.primary]
+    pair = edge.link.on[0]
+    child_col = table.columns[pair.from_.column]  # e.g. employee.reports_to
+    parent_col = table.columns[pair.to.column]  # e.g. employee.employee_id
+
+    base = (
+        select(
+            table,
+            literal(1).label("depth"),
+            array((parent_col,)).label("path"),
+        )
+        .where(child_col.is_(None))
+        .cte(name=f"{edge.link.name.lower()}_cte", recursive=True)
+    )
+    step = (
+        select(
+            table,
+            (base.c.depth + 1).label("depth"),
+            (base.c.path + array((parent_col,))).label("path"),
+        )
+        .join(base, child_col == base.c[pair.to.column])
+        .where(
+            and_(
+                base.c.depth < edge.link.max_depth,
+                ~base.c.path.any(parent_col),
+            )
+        )
+    )
+    return base.union_all(step)
 
 
 def _apply_object_joins(stmt: Select[Any], metadata: MetaData, obj: ObjectType) -> Select[Any]:
@@ -117,7 +163,21 @@ def _apply_edge(stmt: Select[Any], metadata: MetaData, edge: Edge) -> Select[Any
             ),
         )
         stmt = _apply_object_joins(stmt, metadata, edge.to_object)
-    # `recursive` edges: Task 12 owns emitting the CTE. Left unjoined here.
+    elif edge.link.kind == "recursive":
+        # A recursive link self-joins the object already in scope — it must
+        # NOT call _apply_object_joins for edge.to_object, since that object's
+        # spanned tables are already joined (by the root's own object-joins
+        # pass, or by an earlier edge that brought it into scope). Doing so
+        # again would duplicate them.
+        cte = _recursive_cte(metadata, edge)
+        pair = edge.link.on[0]
+        # Join against the CTE's own column, not `edge.link.on`'s generic
+        # from/to pair (that would compare the base table to itself, since
+        # both sides of a recursive link's `on` name the same table).
+        stmt = stmt.join(
+            cte,
+            _column(metadata, pair.to.table, pair.to.column) == cte.c[pair.to.column],
+        )
     return stmt
 
 
