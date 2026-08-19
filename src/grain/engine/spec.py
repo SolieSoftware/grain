@@ -49,4 +49,14 @@ class QuerySpec(BaseModel):
     group_by: list[str] = Field(default_factory=list)
     metrics: list[str] = Field(default_factory=list)
     order_by: list[OrderBy] = Field(default_factory=list)
-    limit: int = Field(default=100, ge=1, le=10_000)
+    # No upper bound: this database is small and known (largest table 8,715
+    # rows), so a hard ceiling here would add friction without buying real
+    # protection -- GuardConfig.row_cap is the actual backstop against an
+    # unbounded result, and unlike this field it can be sized to the data
+    # rather than to an arbitrary round number. `None` is legal and means "no
+    # LIMIT clause at all"; `ge=1` still rejects zero and negative counts,
+    # which are never a real request. The default of 100 stays -- removing
+    # the ceiling on what's expressible is not the same as making unbounded
+    # the default, and a caller that forgot to think about size should still
+    # get a small result back.
+    limit: int | None = Field(default=100, ge=1)

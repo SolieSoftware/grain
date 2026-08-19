@@ -54,3 +54,10 @@ def test_multiple_filters_are_all_present_in_the_where_clause(chinook_lite, lite
 def test_limit_is_applied(chinook_lite, lite_metadata):
     sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"], limit=25)
     assert "LIMIT 25" in sql
+
+
+def test_limit_of_none_emits_no_limit_clause(chinook_lite, lite_metadata):
+    """`limit=None` means the caller explicitly asked for every row -- the
+    compiler must not silently reintroduce a default LIMIT on its behalf."""
+    sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"], limit=None)
+    assert "LIMIT" not in sql.upper()

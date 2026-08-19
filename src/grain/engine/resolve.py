@@ -52,7 +52,7 @@ class ResolvedQuery:
     group_by: list[ResolvedProperty] = field(default_factory=list)
     metrics: list[Metric] = field(default_factory=list)
     order_by: list[OrderBy] = field(default_factory=list)
-    limit: int = 100
+    limit: int | None = 100
 
     @property
     def tables_in_scope(self) -> list[str]:

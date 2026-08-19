@@ -6,9 +6,15 @@ def test_minimal_spec_defaults():
     spec = QuerySpec(object="Customer")
     assert spec.filters == [] and spec.metrics == [] and spec.limit == 100
 
-def test_limit_is_capped():
-    with pytest.raises(ValidationError):
-        QuerySpec(object="Customer", limit=10_001)
+def test_limit_has_no_upper_bound():
+    """This database is small and known; a hard ceiling here would add
+    friction without buying real protection. GuardConfig.row_cap is the
+    actual backstop, and it can be sized to the data instead of to an
+    arbitrary round number."""
+    assert QuerySpec(object="Customer", limit=10_001).limit == 10_001
+
+def test_limit_none_means_no_limit_clause_is_legal():
+    assert QuerySpec(object="Customer", limit=None).limit is None
 
 def test_limit_must_be_positive():
     with pytest.raises(ValidationError):

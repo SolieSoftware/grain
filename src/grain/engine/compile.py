@@ -459,4 +459,8 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
     for mp in rewritten:
         stmt = _aggregate_then_join(stmt, metadata, rq, mp)
 
-    return stmt.limit(rq.limit)
+    # `None` means "no LIMIT clause at all", not "limit to nothing" -- calling
+    # `.limit(None)` would coincidentally also emit no LIMIT in SQLAlchemy,
+    # but the branch is written explicitly so that reading this function
+    # doesn't require knowing that coincidence.
+    return stmt if rq.limit is None else stmt.limit(rq.limit)

@@ -1,6 +1,10 @@
 import pytest
 from decimal import Decimal
+from sqlalchemy import event
+
 from grain.engine.api import Grain
+from grain.engine.errors import GuardTripped
+from grain.engine.guard import GuardConfig
 from grain.engine.spec import Hop, QuerySpec
 from grain.domains.chinook import CHINOOK_DIR
 
@@ -10,6 +14,14 @@ pytestmark = pytest.mark.integration
 @pytest.fixture(scope="session")
 def g(db_engine):
     return Grain.load(CHINOOK_DIR, db_engine)
+
+
+@pytest.fixture(scope="session")
+def g_tight_cap(db_engine):
+    """Same domain, a `row_cap` small enough that an ordinary un-grouped
+    query on this data exceeds it -- used to prove the cap is reachable
+    through the real facade, not just at the guard layer in isolation."""
+    return Grain.load(CHINOOK_DIR, db_engine, guard=GuardConfig(row_cap=5))
 
 
 def test_query_returns_rows_and_compiled_sql(g):
@@ -54,12 +66,42 @@ def test_additive_flag_is_false_across_a_many_to_many(g):
 
 
 def test_explain_returns_sql_without_executing(g):
-    out = g.explain(QuerySpec(object="Customer", group_by=["country"],
-                              metrics=["customer_count"], limit=100))
+    """`"rows" not in out` alone is vacuous -- the dict literal in
+    `explain()` guarantees that regardless of whether a query ran. Attach a
+    `before_cursor_execute` listener on the real engine and prove it never
+    fires: that's a statement about behaviour, not about a dict's shape."""
+    executed: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        executed.append(statement)
+
+    event.listen(g.engine, "before_cursor_execute", _record)
+    try:
+        out = g.explain(QuerySpec(object="Customer", group_by=["country"],
+                                  metrics=["customer_count"], limit=100))
+    finally:
+        event.remove(g.engine, "before_cursor_execute", _record)
+
+    assert executed == []
     assert "SELECT" in out["compiled_sql"].upper()
     assert "rows" not in out
 
 
-def test_row_cap_is_enforced(g):
+def test_spec_limit_bounds_the_result(g):
+    """Proves the SQL LIMIT clause bounds the result -- this is `QuerySpec.
+    limit` doing its job, not the guard's `row_cap` (10_000 by default,
+    nowhere near 5). Covered here for the facade; the guard's own row_cap
+    behaviour is proven directly in tests/integration/test_guard_enforcement.py."""
     result = g.query(QuerySpec(object="Track", group_by=["name"], limit=5))
     assert len(result.rows) <= 5
+
+
+def test_row_cap_is_reachable_through_the_real_facade(g_tight_cap):
+    """`limit=None` now legally requests every row with no SQL LIMIT at all,
+    which is exactly the case the guard exists to catch -- this is the same
+    scenario as test_guard_enforcement.py's direct test, but proven
+    end-to-end through `Grain.query()` rather than by calling `execute()`
+    in isolation."""
+    with pytest.raises(GuardTripped) as exc:
+        g_tight_cap.query(QuerySpec(object="Track", group_by=["name"], limit=None))
+    assert exc.value.limit_name == "row_cap"
