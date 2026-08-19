@@ -3,9 +3,11 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development.** 14 of 16 planned tasks complete. The engine answers
-grain-correct queries over the Chinook sample database. The comparison that would
-justify it — against raw text-to-SQL — has **not been run yet**.
+**Status: in development, and not yet sound enough to rely on.** All 16 planned
+tasks are complete and 170 tests pass, but a whole-branch review found **five
+critical defects** that are not yet fixed. See *"Known defects"* below before
+trusting any number this produces. The comparison that would justify the project —
+against raw text-to-SQL — has also **not been run**.
 
 ---
 
@@ -65,9 +67,14 @@ access:
 
 Plus an orthogonal **`additive`** flag: a query can be correctly computed *and*
 non-additive, when the path to a dimension crosses a many-to-many. `revenue` by
-`Playlist` returns 10 correct groups summing to 5738.28 against a true 2328.60 —
-every number right, the total meaningless. It flags rather than refuses, because
-the per-group numbers are what the question asked for.
+`Playlist` returns groups summing to 5738.28 against a true 2328.60 — the total is
+meaningless by construction, so it flags rather than refuses, because the per-group
+numbers are what the question asked for.
+
+> ⚠️ **Correction.** An earlier version of this README claimed those were *"10
+> correct groups"*. They are not. Chinook ships duplicate playlist names, and the
+> per-group correctness guarantee silently assumes one group equals one root row —
+> so groups whose name collides double-count. See defect **C2** below.
 
 ## Layers
 
@@ -100,7 +107,7 @@ docs/plans/                  the implementation plan this was built from
 uv venv && uv pip install -e ".[dev,mcp]"
 cp .env.example .env          # then set GRAIN_DATABASE_URL
 set -a && . ./.env && set +a
-uv run pytest -q              # 123 passing
+uv run pytest -q              # 170 passing
 ```
 
 Unit tests need no database. Integration tests skip without `GRAIN_DATABASE_URL`,
@@ -109,6 +116,30 @@ summary.
 
 The database is Chinook v1.4.5, loaded from `Chinook_PostgreSql_SerialPKs.sql`
 (the snake_case variant; the default port uses quoted CamelCase).
+
+## Known defects
+
+Found by a whole-branch review on 2026-08-18, **not yet fixed**. All were
+demonstrated with measured numbers. The pattern: the engine defends the *grain*
+axis rigorously and the *population* axis — which rows, which groups, which entity
+— not at all.
+
+| | Defect |
+|---|---|
+| **C1** | A non-additive metric with **no `group_by`** returns the over-counted total with no refusal. The flagship example above, with the GROUP BY removed, returns 5738.28 as a single unlabelled figure |
+| **C2** | Per-group correctness assumes one group = one root row. Chinook has duplicate playlist names, so colliding groups double-count — and `describe()` publishes "each group is still correct" to the agent as fact |
+| **C3** | A dotted filter on a property reached through an *object join* compiles to a **cartesian product**. Four specs in the shipped ontology hit it. SQLAlchemy warns; nothing turns warnings into failures |
+| **C4** | The metric-expression grain check is case-sensitive while SQL identifiers are not, so `sum(INVOICE.TOTAL)` bypasses validation entirely and can reintroduce the 8.95× over-count |
+| **C5** | `ObjectType.joins` declares **no cardinality**, so the claim that every verdict comes from declared cardinality alone is currently false — object joins are silently assumed many-to-one |
+
+Also: `order_by` is accepted and never read (combined with a default `limit` of 100,
+"top 10 by revenue" returns 10 arbitrary rows); a dotted filter changes the
+*population* rather than the rows, which is documented nowhere; recursive traversal
+silently drops orphans and returns the wrong entity.
+
+**The narrow claim that survives:** the figure **20848.62 specifically** is
+unreachable, and the core grain algorithm withstood direct attack. Numbers of the
+same character are not yet unreachable.
 
 ## What is not done
 
