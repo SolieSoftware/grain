@@ -73,6 +73,14 @@ class Grain:
             if mp.forced_by
         ]
 
+    def describe(self, object: str | None = None) -> dict[str, Any]:
+        """How the agent learns the domain, in place of the DDL. See
+        `describe.py` for why the non-additivity rule is stated once rather
+        than enumerated per metric x dimension."""
+        from .describe import describe as _describe
+
+        return _describe(self.ontology, object)
+
     def explain(self, spec: QuerySpec) -> dict[str, Any]:
         """The compiled SQL and the plan's verdicts, without ever touching the
         database. Intentionally has no `rows` key -- there are none, and a
