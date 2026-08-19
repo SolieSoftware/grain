@@ -8,7 +8,15 @@ rule -- a metric grouped by a dimension reached through a `many_to_many` link
 is non-additive -- and the agent derives the rest, because it already sees
 every link's cardinality below. Constant cost, total coverage, unchanged at
 200 tables. Do not add a per-metric `non_additive_dimensions` field back in;
-`test_does_not_enumerate_metric_dimension_pairs` guards against it.
+`test_does_not_enumerate_metric_dimension_pairs` pins the permitted key set
+on a metric dict, so any new per-metric field has to be a deliberate change
+to that test, whatever it is called.
+
+The same S1 pattern applies to grain-matching: "average invoice value" is
+ambiguous between a metric at invoice grain and one at invoice_line grain,
+and that ambiguity cannot be closed by prose on two metrics (it generalises
+to every metric an agent has never seen). `GRAIN_MATCHING_RULE` states it
+once, as a rule, rather than as an enumerated warning per metric pair.
 
 `ai_context` (synonyms + instructions) is surfaced faithfully because it is
 the mitigation for this design's weakest joint: two metrics (or two objects)
@@ -17,6 +25,14 @@ symbolic layer only catches when the pick is *also* grain-wrong. A
 grain-compatible but semantically wrong pick passes silently, so the prose
 that disambiguates it has to travel with the ontology, not live only in a
 human's head.
+
+A metric's `grain` names a TABLE (e.g. `invoice_line`); `objects` is keyed by
+OBJECT NAME (e.g. `InvoiceLine`). Nothing about that mapping is guaranteed to
+be a case-conversion of the other in a domain pack other than Chinook, so
+`grain_object` states it explicitly -- the object type name whose `primary`
+table equals the metric's grain, or `null` if no object declares it. Each
+object also reports its own `primary`, so the mapping is inspectable from
+either direction rather than implied.
 
 `Result.additive` (in `execute.py`) is the authoritative, per-query verdict.
 This module carries the rule an agent can apply in advance; it never repeats
@@ -40,6 +56,14 @@ GRAIN_RULE = (
     "and reports the rewrite. If it cannot, it refuses and names the alternative."
 )
 
+GRAIN_MATCHING_RULE = (
+    "Match the metric's grain to the entity you are measuring. A metric's grain is "
+    "the thing one row of it represents. An average, a count, or a rate is per that "
+    "entity -- so 'average invoice value' needs a metric at invoice grain, not "
+    "invoice_line grain, even though both describe the same money. When a question "
+    "names an entity, prefer the metric whose grain is that entity."
+)
+
 
 def _ai(ctx: AiContext | None) -> dict[str, Any]:
     if ctx is None:
@@ -48,33 +72,67 @@ def _ai(ctx: AiContext | None) -> dict[str, Any]:
     return {k: v for k, v in fields.items() if v}
 
 
+def _grain_object(onto: Ontology, grain_table: str) -> str | None:
+    """The object type name whose `primary` table is `grain_table`, or `None`
+    if no declared object reaches it -- the explicit bridge from a metric's
+    (table-named) `grain` to the (object-named) keys of `objects`."""
+    obj = onto.object_for_table(grain_table)
+    return obj.name if obj else None
+
+
+def _touching_objects(onto: Ontology, object_name: str) -> set[str]:
+    """`object_name` plus every object one hop away via a link touching it.
+    Not transitive: an agent using the narrowed view needs to see the
+    properties of a linked object to build a dotted filter like
+    'Customer_Invoices.total', but a further hop is out of scope for a view
+    that asked about one object."""
+    names = {object_name}
+    for link in onto.links.values():
+        if object_name in (link.from_, link.to):
+            names.add(link.from_)
+            names.add(link.to)
+    return names
+
+
+def _describe_object(onto: Ontology, name: str) -> dict[str, Any]:
+    obj = onto.objects[name]
+    out: dict[str, Any] = {
+        "primary": obj.primary,
+        "description": obj.description,
+        "properties": {
+            p: {
+                "type": prop.type,
+                "nullable": prop.nullable,
+                "description": prop.description,
+            }
+            for p, prop in obj.properties.items()
+        },
+    }
+    if obj.ai_context:
+        out["ai_context"] = _ai(obj.ai_context)
+    return out
+
+
 def describe(onto: Ontology, object_name: str | None = None) -> dict[str, Any]:
     """A description of the ontology, in the agent's own vocabulary.
 
-    With `object_name`, the `objects` and `links` views narrow to that object
-    and the links touching it; `metrics` and `rules` are unscoped -- a metric
-    or rule is a fact about the whole domain, not about one object.
+    With `object_name`, `objects` narrows to that object plus every object one
+    hop away via a link touching it (so every link's endpoints are always
+    present in `objects`, and the agent can build a dotted filter through
+    them), and `links` narrows to the links touching it. `metrics` and
+    `rules` are unscoped -- a metric or rule is a fact about the whole
+    domain, not about one object.
     """
-    names = [object_name] if object_name else list(onto.objects)
+    names = _touching_objects(onto, object_name) if object_name else set(onto.objects)
     return {
         "domain": onto.name,
         "description": onto.description,
-        "rules": {"grain": GRAIN_RULE, "non_additivity": NON_ADDITIVITY_RULE},
-        "objects": {
-            name: {
-                "description": onto.objects[name].description,
-                "properties": {
-                    p: {"type": prop.type, "nullable": prop.nullable}
-                    for p, prop in onto.objects[name].properties.items()
-                },
-                **(
-                    {"ai_context": _ai(onto.objects[name].ai_context)}
-                    if onto.objects[name].ai_context
-                    else {}
-                ),
-            }
-            for name in names
+        "rules": {
+            "grain": GRAIN_RULE,
+            "non_additivity": NON_ADDITIVITY_RULE,
+            "grain_matching": GRAIN_MATCHING_RULE,
         },
+        "objects": {name: _describe_object(onto, name) for name in names},
         "links": {
             name: {
                 "from": link.from_,
@@ -89,6 +147,7 @@ def describe(onto: Ontology, object_name: str | None = None) -> dict[str, Any]:
         "metrics": {
             name: {
                 "grain": metric.grain,
+                "grain_object": _grain_object(onto, metric.grain),
                 "type": metric.type,
                 "description": metric.description,
                 **(
