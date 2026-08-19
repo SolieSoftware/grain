@@ -3,6 +3,7 @@ from grain.engine.describe import (
     NON_ADDITIVITY_RULE,
     describe,
 )
+from grain.engine.ontology import AiContext, Metric, Ontology
 
 
 def test_lists_objects_links_and_metrics(chinook_lite):
@@ -52,14 +53,40 @@ def test_states_the_grain_matching_rule(chinook_lite):
 def test_does_not_enumerate_metric_dimension_pairs(chinook_lite):
     """S1: the rule scales; an enumeration would grow multiplicatively.
 
-    Asserted structurally, by pinning the permitted key set, so a
-    reintroduction under any other name (e.g. `non_additive_dims`, or nested
-    inside `ai_context`) fails loudly instead of passing silently.
+    Asserted structurally, by pinning the permitted key set at BOTH levels --
+    the metric dict and, if present, its nested `ai_context` -- so a
+    reintroduction under any other name, at either level (e.g.
+    `non_additive_dims` alongside `grain`, or nested one level deeper inside
+    `ai_context`), fails loudly instead of passing silently.
     """
     out = describe(chinook_lite)
     allowed = {"grain", "grain_object", "type", "description", "ai_context"}
+    allowed_ai_context = {"synonyms", "instructions"}
     for metric in out["metrics"].values():
         assert set(metric) <= allowed
+        if "ai_context" in metric:
+            assert set(metric["ai_context"]) <= allowed_ai_context
+
+
+def test_ai_context_shape_is_pinned():
+    """The chinook_lite fixture has no metric with ai_context set, so this
+    constructs one directly: pinning only the metric's top-level keys would
+    let a look-alike field sail through one level deeper, inside ai_context
+    itself -- this proves that path is closed too."""
+    onto = Ontology(
+        name="t",
+        metrics={
+            "m": Metric(
+                name="m",
+                grain="invoice",
+                expr="sum(invoice.total)",
+                type="decimal",
+                ai_context=AiContext(synonyms=["x"], instructions="y"),
+            )
+        },
+    )
+    out = describe(onto)
+    assert set(out["metrics"]["m"]["ai_context"]) <= {"synonyms", "instructions"}
 
 
 def test_properties_report_a_description_key(chinook_lite):

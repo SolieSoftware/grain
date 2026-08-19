@@ -7,16 +7,20 @@ multiplicatively with the ontology; instead this module states the general
 rule -- a metric grouped by a dimension reached through a `many_to_many` link
 is non-additive -- and the agent derives the rest, because it already sees
 every link's cardinality below. Constant cost, total coverage, unchanged at
-200 tables. Do not add a per-metric `non_additive_dimensions` field back in;
-`test_does_not_enumerate_metric_dimension_pairs` pins the permitted key set
-on a metric dict, so any new per-metric field has to be a deliberate change
-to that test, whatever it is called.
+200 tables. Do not add a per-metric `non_additive_dimensions` field back in,
+at the top level of a metric dict or nested inside its `ai_context`;
+`test_does_not_enumerate_metric_dimension_pairs` pins the permitted keys of
+both, so any new field -- under any name, at either level -- has to be a
+deliberate change to that test.
 
-The same S1 pattern applies to grain-matching: "average invoice value" is
-ambiguous between a metric at invoice grain and one at invoice_line grain,
-and that ambiguity cannot be closed by prose on two metrics (it generalises
-to every metric an agent has never seen). `GRAIN_MATCHING_RULE` states it
-once, as a rule, rather than as an enumerated warning per metric pair.
+The same S1 pattern applies to grain-matching: a metric's grain must match
+the entity being *measured*, never the entity it is merely grouped by --
+"average invoice value" measures invoices (invoice grain, not invoice_line),
+and "average tracks per playlist" measures tracks and groups by playlist
+(track grain, with playlist as the group-by). That distinction cannot be
+closed by prose on two metrics; it generalises to every metric an agent has
+never seen. `GRAIN_MATCHING_RULE` states it once, as a rule, rather than as
+an enumerated warning per metric pair.
 
 `ai_context` (synonyms + instructions) is surfaced faithfully because it is
 the mitigation for this design's weakest joint: two metrics (or two objects)
@@ -57,11 +61,14 @@ GRAIN_RULE = (
 )
 
 GRAIN_MATCHING_RULE = (
-    "Match the metric's grain to the entity you are measuring. A metric's grain is "
-    "the thing one row of it represents. An average, a count, or a rate is per that "
-    "entity -- so 'average invoice value' needs a metric at invoice grain, not "
-    "invoice_line grain, even though both describe the same money. When a question "
-    "names an entity, prefer the metric whose grain is that entity."
+    "A metric's grain must match the entity being measured -- the thing one row "
+    "of the metric represents -- never the entity it is grouped by. 'Average "
+    "invoice value' measures invoices, so the metric must be at invoice grain, not "
+    "invoice_line grain, even though both describe the same money. 'Average tracks "
+    "per playlist' measures tracks and groups by playlist: the metric is at track "
+    "grain, and playlist enters only as a group-by, reached through a link. When a "
+    "question names more than one entity, the metric's grain is the one being "
+    "measured, not the one being grouped by."
 )
 
 
