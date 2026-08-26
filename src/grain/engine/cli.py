@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
         "rewrites": [r.__dict__ for r in result.rewrites],
         "additive": result.additive,
         "non_additive_reason": result.non_additive_reason,
+        "limit_reached": result.limit_reached,
     }, indent=2, default=_default))
     return 0
 

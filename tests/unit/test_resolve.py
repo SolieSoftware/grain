@@ -2,7 +2,7 @@ import pytest
 
 from grain.engine.errors import NoPath, UnknownName
 from grain.engine.resolve import resolve, suggest
-from grain.engine.spec import Filter, Hop, QuerySpec
+from grain.engine.spec import Hop, QuerySpec
 
 
 def test_resolves_root_and_direct_path(chinook_lite):

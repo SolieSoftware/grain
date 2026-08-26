@@ -6,7 +6,7 @@ import difflib
 from dataclasses import dataclass, field
 from typing import Any
 
-from .errors import NoPath, UnknownName
+from .errors import AmbiguousGroupKey, GroupKeyNotOnPath, NoPath, UnknownName
 from .ontology import LinkType, Metric, ObjectType, Ontology, Property
 from .spec import FilterOp, OrderBy, QuerySpec
 
@@ -33,6 +33,20 @@ class ResolvedProperty:
     object: ObjectType
     name: str
     prop: Property
+    # Which position on the walked path this property is read AT. `None` is the
+    # root; `i` is the object hop `i` lands on. The same physical column can be
+    # in scope at more than one position -- a self-referential link traversed
+    # once puts `employee` in scope as both the root and the ancestor -- so the
+    # column alone does not say which row is meant. `compile` keeps one FROM
+    # element per position and reads the column off the element for THIS one.
+    edge_index: int | None = None
+
+    @property
+    def qualified(self) -> bool:
+        """True when this property belongs to a traversed object rather than the
+        root. Such a key is labelled by its full dotted name, so a result column
+        can never silently mean the root's property of the same name."""
+        return self.edge_index is not None
 
 
 @dataclass
@@ -106,6 +120,47 @@ def _resolve_filter(
     )
 
 
+def _group_key(key: str, root: ObjectType, path: list[Edge]) -> ResolvedProperty:
+    """A group key is either bare (a root property) or qualified by a TRAVERSED
+    link (`Employee_Manager.last_name` — a property of the object that hop lands
+    on).
+
+    Qualification names a link rather than an object because a link is what the
+    caller wrote in `traverse`, and because two different links can land on the
+    same object type. It is also why the link must actually be traversed: the
+    column has to be in FROM to be grouped by, and only a hop puts it there.
+
+    NOTE the deliberate asymmetry with a dotted FILTER, which does not require
+    the link to be traversed and does not read a column of the joined row — it
+    compiles to `EXISTS` and selects which root objects the query is about. A
+    filter changes the population; a group key reads a value. Both are published
+    as rules in `describe()`, because the shared dotted spelling is otherwise an
+    invitation to assume they work the same way.
+    """
+    if "." not in key:
+        return _property(root, key)
+
+    link_name, _, prop_name = key.partition(".")
+    positions = [i for i, edge in enumerate(path) if edge.link.name == link_name]
+    traversed = _unique([edge.link.name for edge in path])
+    if not positions:
+        raise GroupKeyNotOnPath(key, link_name, traversed)
+    if len(positions) > 1:
+        raise AmbiguousGroupKey(key, link_name, positions)
+
+    index = positions[0]
+    target = path[index].to_object
+    resolved = _property(target, prop_name)
+    # `name` carries the FULL key, because it is the label the caller gets back
+    # and the name `order_by` matches against. A qualified key labelled by its
+    # bare property name would collide with the root's property of that name in
+    # the emitted SELECT, which is exactly the ambiguity qualification exists to
+    # remove.
+    return ResolvedProperty(
+        object=target, name=key, prop=resolved.prop, edge_index=index
+    )
+
+
 def resolve(spec: QuerySpec, onto: Ontology) -> ResolvedQuery:
     root = _object(onto, spec.object)
 
@@ -135,13 +190,24 @@ def resolve(spec: QuerySpec, onto: Ontology) -> ResolvedQuery:
     # identically-aliased subqueries, which SQLAlchemy rejects mid-compile — a
     # crash on a request whose meaning was never in doubt. First occurrence
     # wins, so the caller's own column order survives.
-    group_by = [_property(root, key) for key in _unique(spec.group_by)]
+    group_by = [_group_key(key, root, path) for key in _unique(spec.group_by)]
 
     metrics: list[Metric] = []
     for name in _unique(spec.metrics):
         if name not in onto.metrics:
             raise UnknownName("metric", name, suggest(name, list(onto.metrics)))
         metrics.append(onto.metrics[name])
+
+    # An order_by key must name a column the query actually emits. It used to be
+    # accepted and never read: combined with `limit` defaulting to 100, "top 10
+    # countries by revenue" returned 10 ARBITRARY countries, correctly computed,
+    # with nothing to say they were not the top 10 (defect I1). Validating here
+    # means a key that could never be honoured is a typed error at the door
+    # rather than a silently ignored field.
+    emitted = [rp.name for rp in group_by] + [m.name for m in metrics]
+    for ob in spec.order_by:
+        if ob.key not in emitted:
+            raise UnknownName("order_by key", ob.key, suggest(ob.key, emitted))
 
     return ResolvedQuery(
         ontology=onto,

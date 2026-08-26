@@ -114,6 +114,11 @@ class Grain:
             rewrites=self._rewrites(plan),
             additive=plan.additive,
             non_additive_reason=plan.non_additive_reason,
+            # Exactly `limit` rows means there may be more that were never
+            # fetched. Reported rather than left for the caller to infer: the
+            # inference requires knowing the limit the caller may not have set
+            # itself (it defaults to 100).
+            limit_reached=rq.limit is not None and len(rows) == rq.limit,
             ontology_elements_used=self._ontology_elements_used(rq),
         )
 

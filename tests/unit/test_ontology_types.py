@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from grain.engine.ontology import ColumnRef, LinkType, Metric, Ontology, ObjectType, Property
+from grain.engine.ontology import ColumnRef, LinkType, Ontology, ObjectType, Property
 
 def test_column_ref_parses_dotted_name():
     ref = ColumnRef.parse("track.album_id")

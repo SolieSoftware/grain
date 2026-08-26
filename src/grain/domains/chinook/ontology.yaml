@@ -19,13 +19,19 @@ objects:
     title_property: name
     description: A purchasable audio track.
     joins:
+      # cardinality is required and checked against the database: `genre_id` is
+      # genre's primary key, so at most one genre row per track. An object join
+      # that fanned would replicate Track's own rows at no declared grain, and
+      # is refused at load — model that as a link instead.
       genre:
         to: genre
         kind: left
+        cardinality: many_to_one
         on: [{from: track.genre_id, to: genre.genre_id}]
       media_type:
         to: media_type
         kind: left
+        cardinality: many_to_one
         on: [{from: track.media_type_id, to: media_type.media_type_id}]
     properties:
       name: {column: track.name, type: string}
@@ -51,6 +57,15 @@ objects:
     primary: playlist
     title_property: name
     properties:
+      # Chinook ships DUPLICATE playlist names ('Music' x2, 'Movies' x2, 'TV
+      # Shows' x2, 'Audiobooks' x2), so `name` does not identify a playlist and
+      # grouping a non-additive metric by it merged two playlists into one group
+      # and double-counted every track they shared (defect C2). Playlist is the
+      # only object here that can root a non-additive query — Playlist_Tracks is
+      # this pack's only many_to_many — so this is the one place a unique key has
+      # to exist for the refusal in grain.analyse to be able to name a legal
+      # alternative.
+      id: {column: playlist.playlist_id, type: integer, unique: true}
       name: {column: playlist.name, type: string, nullable: true}
 
   Customer:
@@ -80,6 +95,12 @@ objects:
     primary: employee
     title_property: last_name
     properties:
+      # Employee is the other object that can root or be traversed into a
+      # non-additive query: Employee_Manager is recursive, and traversing a
+      # recursive link walks the depth-bounded closure, which is many_to_many.
+      # Grouping by an ancestor therefore needs a key that identifies one
+      # employee, exactly as grouping by playlist does.
+      id: {column: employee.employee_id, type: integer, unique: true}
       first_name: {column: employee.first_name, type: string}
       last_name: {column: employee.last_name, type: string}
       title: {column: employee.title, type: string, nullable: true}
@@ -191,3 +212,15 @@ metrics:
     grain: customer
     expr: "count(distinct customer.customer_id)"
     type: integer
+
+  employee_count:
+    grain: employee
+    expr: "count(distinct employee.employee_id)"
+    type: integer
+    description: Headcount, at employee grain.
+    ai_context:
+      synonyms: [headcount, number of employees, staff count, how many people]
+      instructions: >
+        Combine with a traversal of Employee_Manager and a group_by on
+        Employee_Manager.id to count everyone reporting up to each manager,
+        at any depth.

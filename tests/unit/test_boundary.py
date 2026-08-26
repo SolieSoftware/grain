@@ -9,17 +9,32 @@ ADAPTERS = {"cli", "server"}
 
 
 def _imports(path: pathlib.Path) -> set[str]:
+    """Every module name an import statement in this file names.
+
+    `ImportFrom.names` matters as much as `.module`: `from grain import domains`
+    puts the offending name in `names`, and a RELATIVE import (`from . import
+    cli`, `from .. import domains`) has `module is None` entirely. Recording only
+    `.module`, and skipping the node when it was None, meant this test could not
+    see any of those forms — the four ways the boundary is most likely to be
+    crossed were exactly the four it did not check (defect I4).
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
     found: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             found.update(a.name for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            found.add(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module:
+                found.add(module)
+            for alias in node.names:
+                found.add(f"{module}.{alias.name}" if module else alias.name)
     return found
 
 
-@pytest.mark.parametrize("path", sorted(ENGINE.glob("*.py")))
+# `rglob`, not `glob`: a file added under `engine/anything/` is engine code and is
+# bound by the same rule, but was previously unchecked.
+@pytest.mark.parametrize("path", sorted(ENGINE.rglob("*.py")))
 def test_engine_never_imports_a_domain(path):
     if path.stem in ADAPTERS:
         return  # adapters may name a default domain; the engine core may not
@@ -29,7 +44,7 @@ def test_engine_never_imports_a_domain(path):
     )
 
 
-@pytest.mark.parametrize("path", sorted(ENGINE.glob("*.py")))
+@pytest.mark.parametrize("path", sorted(ENGINE.rglob("*.py")))
 def test_core_engine_never_imports_an_adapter(path):
     if path.stem in ADAPTERS:
         return

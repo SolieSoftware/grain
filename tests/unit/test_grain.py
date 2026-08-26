@@ -91,10 +91,26 @@ def test_fanning_edge_before_the_grain_leaves_it_inline(chinook_lite):
 
 
 def test_refusal_always_names_a_legal_next_move(chinook_lite):
-    """No metric is in scope from Employee, so the metric-name suggestions are
-    empty and the refusal must fall back to a repair the caller can act on."""
+    """With NO metric in scope the suggestion list is empty and the refusal must
+    fall back to a repair the caller can act on.
+
+    `employee_count` is dropped for this test on purpose: it sits at employee
+    grain, so while it exists a metric IS in scope from Employee and this
+    fallback branch never runs. Every object in the fixture now owns a metric at
+    its own grain, which is realistic and leaves this branch reachable only by
+    saying so explicitly.
+    """
+    onto = chinook_lite.model_copy(
+        update={
+            "metrics": {
+                name: metric
+                for name, metric in chinook_lite.metrics.items()
+                if name != "employee_count"
+            }
+        }
+    )
     with pytest.raises(FanOutRefused) as exc:
-        plan_for(chinook_lite, object="Employee", metrics=["customer_count"])
+        plan_for(onto, object="Employee", metrics=["customer_count"])
     assert exc.value.alternatives
     assert "query Customer instead" in exc.value.alternatives
 

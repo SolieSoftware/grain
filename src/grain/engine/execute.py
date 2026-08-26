@@ -53,6 +53,14 @@ class Result:
     one layer up, would quietly undo that fix and hide the same failure mode
     one hop further from where it happens. `None` is what actually happened;
     it is passed through rather than replaced.
+
+    `limit_reached` says the row count is exactly the requested `limit`, so
+    there may be more rows the caller never saw. It is not cosmetic: with
+    `limit` defaulting to 100 and `order_by` previously ignored, a caller asking
+    for "the top 10" got 10 arbitrary rows with nothing to distinguish
+    10-of-10 from 10-of-24 (defect I1). It reports a POSSIBLE truncation --
+    a result of exactly `limit` rows out of exactly `limit` is flagged too,
+    because the two cases are indistinguishable without fetching more.
     """
 
     rows: list[tuple[Any, ...]] = field(default_factory=list)
@@ -61,6 +69,7 @@ class Result:
     rewrites: list[Rewrite] = field(default_factory=list)
     additive: bool = True
     non_additive_reason: str | None = None
+    limit_reached: bool = False
     ontology_elements_used: list[str] = field(default_factory=list)
 
 

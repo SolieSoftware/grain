@@ -108,3 +108,40 @@ def test_single_object_view_is_narrower(chinook_lite):
         assert link["to"] in out["objects"]
     # And the properties of a one-hop neighbour are actually there.
     assert "total" in out["objects"]["Invoice"]["properties"]
+
+
+def test_a_unique_property_is_visible_to_the_agent(chinook_lite):
+    """`NON_ADDITIVITY_RULE` instructs the agent to group by a property marked
+    unique, so the description has to say which ones are. A rule naming a fact
+    the reader cannot see is not actionable — and this flag is the difference
+    between a query being answered and refused."""
+    from grain.engine.describe import describe
+
+    props = describe(chinook_lite, "Playlist")["objects"]["Playlist"]["properties"]
+    assert props["id"]["unique"] is True
+    assert props["name"]["unique"] is False
+
+
+def test_the_non_additivity_rule_states_its_own_condition(chinook_lite):
+    """It used to publish "Each group is still correct on its own" flatly, which
+    was false for chinook's duplicate playlist names (defect C2) — a wrong domain
+    fact, asserted to the agent by the very thing meant to teach it the domain."""
+    from grain.engine.describe import describe
+
+    rule = describe(chinook_lite)["rules"]["non_additivity"]
+    assert "unique" in rule
+    assert "refused" in rule
+
+
+def test_the_qualified_key_and_recursive_rules_are_published(chinook_lite):
+    """Both are semantics an agent cannot guess from the spec's shape, and both
+    were unstated while the code enforced them. `max_depth` in particular is the
+    difference between "the manager" and "the management chain", which is the
+    difference between an additive answer and a non-additive one."""
+    from grain.engine.describe import describe
+
+    rules = describe(chinook_lite)["rules"]
+    assert "traverse" in rules["traversed_keys"]
+    assert "max_depth" in rules["recursive_links"]
+    assert "many_to_many" in rules["recursive_links"]
+    assert "unique" in rules["recursive_links"]

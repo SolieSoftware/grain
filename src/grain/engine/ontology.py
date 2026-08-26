@@ -52,9 +52,32 @@ class JoinPair(BaseModel):
 
 
 class TableJoin(BaseModel):
+    """One extra table a single object SPANS — not a relationship between two
+    objects, which is a `LinkType`.
+
+    `cardinality` is REQUIRED and has no default, deliberately. It used to be
+    absent entirely, which meant every object join was silently assumed
+    many_to_one and the engine's central claim — that every verdict is decided
+    from declared cardinality alone — was false for a whole class of join
+    (defect C5). A fanning object join replicated the object's own rows with no
+    rewrite and no flag: `sum(thing.weight)` over two fanning joins returned 6
+    against a true 3, reported as `additive: true` with no rewrites.
+
+    A default would have reintroduced exactly the silent assumption that caused
+    it, so there is none: the author states the cardinality, and `loader.py`
+    checks the statement against the database's own constraints rather than
+    trusting it.
+    """
+
     to: str
     kind: Literal["left", "inner"] = "left"
+    cardinality: Cardinality
     on: list[JoinPair]
+
+    @property
+    def fans_out(self) -> bool:
+        """True when joining this table can replicate the object's own rows."""
+        return self.cardinality in FANNING
 
 
 class AiContext(BaseModel):
@@ -63,9 +86,22 @@ class AiContext(BaseModel):
 
 
 class Property(BaseModel):
+    """`unique: true` declares that this property identifies ONE row of its
+    object — a claim `loader.py` checks against the database's primary key and
+    unique constraints, never merely accepts.
+
+    It exists because non-additivity's per-group guarantee depends on it. "Each
+    group is still correct on its own" is true only when a group is one root
+    row; grouping `revenue` by `playlist.name`, where two playlists share a
+    name, merged them and double-counted every track they both held (defect
+    C2). `grain.analyse` now requires a unique key on any non-additive query, so
+    this flag is load-bearing rather than documentation.
+    """
+
     column: ColumnRef
     type: ValueType
     nullable: bool = False
+    unique: bool = False
     via: str | None = None
     description: str | None = None
 
@@ -118,9 +154,35 @@ class LinkType(BaseModel):
         return self
 
     @property
+    def effective_cardinality(self) -> Cardinality:
+        """What TRAVERSING this link does to the rows it started from.
+
+        For a recursive link this is deliberately NOT the declared cardinality.
+        `cardinality` states one hop — each employee has exactly one manager, so
+        `many_to_one` — and that is the fact an ontology author actually knows.
+        But traversing a recursive link walks the depth-bounded CLOSURE: each
+        employee has many ancestors, and each ancestor has many descendants.
+        That relation is `many_to_many`, so it both fans out (a metric's rows are
+        replicated once per ancestor) and makes groups overlap (a fact reachable
+        from an employee is reachable from every ancestor above them).
+
+        Deriving the closure here rather than asking the author to declare it
+        keeps one fact in the ontology and puts the consequence in one place. It
+        also means a recursive traversal is automatically caught by the
+        non-additivity machinery C2 built, instead of needing its own rule.
+
+        `max_depth == 1` is the exception and the escape hatch: one hop IS the
+        declared cardinality, so `Hop(link="Employee_Manager", max_depth=1)` asks
+        for the direct manager, with no fan-out and no non-additivity.
+        """
+        if self.kind == "recursive" and self.max_depth > 1:
+            return "many_to_many"
+        return self.cardinality
+
+    @property
     def fans_out(self) -> bool:
         """True when traversing this edge can replicate the rows we started with."""
-        return self.cardinality in FANNING
+        return self.effective_cardinality in FANNING
 
 
 class Metric(BaseModel):

@@ -1,5 +1,4 @@
 import pytest
-from decimal import Decimal
 from sqlalchemy import event
 
 from grain.engine.api import Grain
@@ -58,8 +57,12 @@ def test_no_rewrite_is_reported_when_none_happened(g):
 
 
 def test_additive_flag_is_false_across_a_many_to_many(g):
+    # Grouped by `id` as well as `name`, because chinook ships duplicate playlist
+    # NAMES: grouping by name alone merges two playlists into one group and
+    # double-counts every track they share, which the engine now refuses rather
+    # than flags (defect C2, proven in tests/integration/test_defect_anchors.py).
     result = g.query(QuerySpec(
-        object="Playlist", group_by=["name"], metrics=["revenue"], limit=100,
+        object="Playlist", group_by=["id", "name"], metrics=["revenue"], limit=100,
         traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")]))
     assert result.additive is False
     assert "many_to_many" in result.non_additive_reason

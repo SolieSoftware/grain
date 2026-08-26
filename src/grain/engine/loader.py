@@ -6,19 +6,40 @@ import re
 from pathlib import Path
 
 import yaml
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, UniqueConstraint
 
 from .errors import OntologyError
-from .ontology import ColumnRef, Metric, ObjectType, Ontology, Property
+from .ontology import ColumnRef, Metric, ObjectType, Ontology, Property, TableJoin
 
-# `[a-z_]` as the first character of each half deliberately excludes digits, so a
-# decimal literal like `0.5` can never match as a `table.column` token.
-METRIC_COLUMN_TOKEN = re.compile(r"\b([a-z_][a-z0-9_]*)\.([a-z_][a-z0-9_]*)\b")
+_IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 
-# A bare word in a metric expression, once the qualified tokens are masked out.
-# The lookbehind keeps the exponent of a float literal (`1.5e3`) from reading as
-# an identifier.
-BARE_WORD = re.compile(r"(?<![a-z0-9_.])[a-z_][a-z0-9_]*")
+# Both halves deliberately exclude a leading digit, so a decimal literal like
+# `0.5` can never match as a `table.column` token.
+#
+# The character class spans BOTH cases. It used to be `[a-z_]` only, which made
+# the guard case-sensitive while SQL identifiers are not: `sum(INVOICE.TOTAL)`
+# matched neither this regex nor BARE_WORD, so it was neither grain-checked nor
+# existence-checked, rendered verbatim, and Postgres folded it and ran it --
+# reintroducing the 8.95x over-count through the one door this loader exists to
+# guard (defect C4). Case is folded for COMPARISON below rather than at match
+# time, so a database with genuinely quoted mixed-case identifiers still
+# validates against its real column names.
+METRIC_COLUMN_TOKEN = re.compile(rf"\b({_IDENT})\.({_IDENT})\b")
+
+# A bare word in a metric expression, once numbers and qualified tokens are
+# masked out. The lookbehind stops a fragment of something already classified
+# (the tail of a qualified token, the exponent of a float) reading as an
+# identifier of its own.
+BARE_WORD = re.compile(rf"(?<![A-Za-z0-9_.]){_IDENT}")
+
+# Masked FIRST, so that neither classifier below ever sees a numeric literal and
+# the residue check cannot mistake the `e` of `1.5e3` for an identifier.
+NUMBER = re.compile(r"\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b")
+
+# Whatever is left once the classifiers above have masked their own matches is a
+# token NEITHER of them recognised. An unrecognised token must be an error, not
+# a pass: passing is what let an all-uppercase column reference through.
+IDENT_CHAR = re.compile(r"[A-Za-z_]")
 
 SQL_WORDS: frozenset[str] = frozenset(
     {
@@ -26,11 +47,22 @@ SQL_WORDS: frozenset[str] = frozenset(
         "distinct", "else", "end", "false", "filter", "in", "interval", "is",
         "like", "not", "null", "or", "order", "over", "partition", "then",
         "true", "when", "where",
+        # Window frames. Omitting these rejected a perfectly legal windowed
+        # metric at load -- `over (rows between unbounded preceding and current
+        # row)` -- which is friction, not safety.
+        "current", "exclude", "following", "groups", "no", "others",
+        "preceding", "range", "row", "rows", "ties", "unbounded",
+        # Aggregate ORDER BY and ordered-set aggregates.
+        "first", "group", "last", "nulls", "within",
     }
 )
 """Words that may legally stand unqualified in an aggregate expression. A
 function name is recognised structurally (it is followed by `(`), so this holds
-only the operators and literals — never a column."""
+only the operators, literals and clause keywords — never a column.
+
+Every word added here is a word an unqualified COLUMN of that name could hide
+behind, so the set stays as small as real SQL allows. Matching against it is
+case-insensitive, since SQL keywords are."""
 
 
 # Exists solely so the `on:` join-condition key survives parsing as a string,
@@ -98,6 +130,109 @@ def _require_column(metadata: MetaData, ref: ColumnRef, context: str) -> None:
         )
 
 
+def _unique_column_sets(metadata: MetaData, table: str) -> set[frozenset[str]]:
+    """Every column set the DATABASE itself guarantees is unique.
+
+    Read from the reflected primary key, unique constraints and unique indexes,
+    so a declaration of uniqueness anywhere in the ontology is checked against
+    the only authority on the matter rather than taken on trust.
+    """
+    t = metadata.tables[table]
+    sets: set[frozenset[str]] = set()
+    if t.primary_key is not None and len(t.primary_key.columns):
+        sets.add(frozenset(c.name for c in t.primary_key.columns))
+    for constraint in t.constraints:
+        if isinstance(constraint, UniqueConstraint):
+            sets.add(frozenset(c.name for c in constraint.columns))
+    for index in t.indexes:
+        if index.unique:
+            sets.add(frozenset(c.name for c in index.columns))
+    return sets
+
+
+def _check_join_cardinality(
+    obj: ObjectType, join_name: str, join: TableJoin, metadata: MetaData
+) -> None:
+    """An object join must not fan out, and its non-fanning claim must be true.
+
+    `TableJoin.cardinality` used to not exist: every object join was silently
+    assumed many_to_one, so an object spanning a fanning table replicated its own
+    rows in every query with no rewrite and no flag (defect C5). Declaring the
+    cardinality is only half a fix — a declaration nothing checks is the same
+    silent assumption with a field name attached — so the `to` side must be
+    backed by a key the database actually enforces.
+
+    A FANNING object join is refused outright rather than supported. `joins` says
+    'these tables are all one row of this object'; a fanning table is by
+    definition a different grain, which is what `links` are for. Refusing keeps
+    the engine's claim true (every verdict from declared cardinality alone) and
+    names the legal alternative, instead of half-teaching the grain machinery
+    about a second kind of edge.
+    """
+    ctx = f"object '{obj.name}' join '{join_name}'"
+    if join.fans_out:
+        raise OntologyError(
+            f"{ctx} declares cardinality '{join.cardinality}', which fans out. An "
+            f"object join may not fan out — it would replicate '{obj.name}' rows in "
+            f"every query that touches this object, at no declared grain. Model it "
+            f"as a link from '{obj.name}' to the object that owns '{join.to}' "
+            f"instead; links carry cardinality into the grain analysis, object "
+            f"joins do not."
+        )
+    joined = frozenset(p.to.column for p in join.on if p.to.table == join.to)
+    if not joined:
+        raise OntologyError(
+            f"{ctx}: no join pair targets '{join.to}', so nothing connects the "
+            f"spanned table to '{obj.primary}'."
+        )
+    if joined not in _unique_column_sets(metadata, join.to):
+        raise OntologyError(
+            f"{ctx} declares cardinality '{join.cardinality}', but "
+            f"({', '.join(sorted(joined))}) is not a primary key, unique constraint "
+            f"or unique index on '{join.to}'. The database therefore does not "
+            f"guarantee at most one '{join.to}' row per '{obj.primary}' row, and the "
+            f"join would fan out while claiming not to. Add the constraint, or model "
+            f"this as a link."
+        )
+
+
+def _check_uniqueness(
+    obj: ObjectType, prop_name: str, prop: Property, metadata: MetaData
+) -> None:
+    """`unique: true` must identify one row of THIS object, provably.
+
+    `grain.analyse` refuses a non-additive query that groups by no unique key, so
+    this flag decides whether a question is answerable. A wrong one silently
+    re-authorises the double-count it exists to prevent (defect C2), which is why
+    it is checked against the database and confined to the object's own primary
+    table.
+    """
+    if not prop.unique:
+        return
+    ctx = f"object '{obj.name}' property '{prop_name}'"
+    if prop.via is not None:
+        raise OntologyError(
+            f"{ctx} declares 'unique: true' but is reached through the join "
+            f"'{prop.via}'. Uniqueness must be a property of '{obj.primary}' "
+            f"itself — a spanned table's key identifies its own row, not this one."
+        )
+    if prop.column.table != obj.primary:
+        raise OntologyError(
+            f"{ctx} declares 'unique: true' but its column lives on "
+            f"'{prop.column.table}', not on this object's primary table "
+            f"'{obj.primary}'."
+        )
+    if frozenset({prop.column.column}) not in _unique_column_sets(
+        metadata, prop.column.table
+    ):
+        raise OntologyError(
+            f"{ctx} declares 'unique: true', but '{prop.column.qualified}' is not a "
+            f"single-column primary key, unique constraint or unique index in the "
+            f"database. A group key that is not really unique merges two rows into "
+            f"one group and double-counts everything they share."
+        )
+
+
 def _check_nullability(
     obj: ObjectType, prop_name: str, prop: Property, metadata: MetaData
 ) -> None:
@@ -131,9 +266,25 @@ def _check_nullability(
         )
 
 
+def _folded_column(metadata: MetaData, table: str, column: str) -> str | None:
+    """The real name of `column` on `table`, matched without regard to case.
+
+    Postgres folds an unquoted identifier to lower case before resolving it, so
+    `TOTAL` and `total` are the same column to the database and must be the same
+    column to this validator. Returning the REAL name (rather than a bool) keeps
+    the error messages naming what the database actually calls the column.
+    """
+    columns = metadata.tables[table].columns
+    if column in columns:
+        return column
+    folded = column.lower()
+    return next((c.name for c in columns if c.name.lower() == folded), None)
+
+
 def _validate_metric_expr(metric: Metric, metadata: MetaData) -> None:
     """Every table.column token must belong to the metric's own grain table,
-    and every column reference must be qualified.
+    every column reference must be qualified, and every token must be one of
+    those two things.
 
     This is what makes relocating the expression into a subquery grouped at its
     grain provably safe, without parsing the arithmetic — and it is also what
@@ -144,30 +295,59 @@ def _validate_metric_expr(metric: Metric, metadata: MetaData) -> None:
     holds the whole walked path and the name resolves against whichever table
     happens to own it; in a subquery the FROM holds only the prefix reaching
     the grain. Same declared metric, two numbers, no error either way.
+
+    The three passes are exhaustive BY CONSTRUCTION, which is the point. Every
+    classifier masks what it accepted, and whatever survives all three is a
+    token nothing recognised — an error, never a pass. Silently passing an
+    unclassified token is exactly how `sum(INVOICE.TOTAL)` used to reach the
+    database unchecked (defect C4): it is enough for one token to match no
+    regex for the whole guard to become decorative.
     """
-    _require_table(metadata, metric.grain, f"metric '{metric.name}'")
-    masked = METRIC_COLUMN_TOKEN.sub(" ", metric.expr)
+    ctx = f"metric '{metric.name}'"
+    _require_table(metadata, metric.grain, ctx)
+
+    # Numbers first: masked here, they can never be mistaken for identifiers by
+    # either classifier below, nor left behind as residue.
+    masked = NUMBER.sub(" ", metric.expr)
+
+    for match in METRIC_COLUMN_TOKEN.finditer(masked):
+        table, column = match.group(1), match.group(2)
+        if table.lower() != metric.grain.lower():
+            raise OntologyError(
+                f"{ctx} has grain '{metric.grain}' but its expression "
+                f"references '{table}.{column}'. A metric may only reference "
+                f"columns of its own grain table."
+            )
+        real = _folded_column(metadata, metric.grain, column)
+        if real is None:
+            raise OntologyError(
+                f"{ctx}: column '{metric.grain}.{column}' does not exist in "
+                f"the database"
+            )
+    masked = METRIC_COLUMN_TOKEN.sub(" ", masked)
+
     for match in BARE_WORD.finditer(masked):
         word = match.group(0)
         if masked[match.end():].lstrip().startswith("("):
             continue  # a function name, not a column
-        if word in SQL_WORDS:
+        if word.lower() in SQL_WORDS:
             continue
         raise OntologyError(
-            f"metric '{metric.name}' references '{word}' unqualified. Every "
-            f"column in a metric expression must be written as "
-            f"'{metric.grain}.{word}' — an unqualified name binds to a "
-            f"different column depending on how the metric is compiled."
+            f"{ctx} references '{word}' unqualified. Every column in a metric "
+            f"expression must be written as '{metric.grain}.{word}' — an "
+            f"unqualified name binds to a different column depending on how "
+            f"the metric is compiled."
         )
-    for table, column in METRIC_COLUMN_TOKEN.findall(metric.expr):
-        if table != metric.grain:
-            raise OntologyError(
-                f"metric '{metric.name}' has grain '{metric.grain}' but its "
-                f"expression references '{table}.{column}'. A metric may only "
-                f"reference columns of its own grain table."
-            )
-        _require_column(
-            metadata, ColumnRef(table=table, column=column), f"metric '{metric.name}'"
+    masked = BARE_WORD.sub(" ", masked)
+
+    residue = IDENT_CHAR.search(masked)
+    if residue is not None:
+        raise OntologyError(
+            f"{ctx} contains '{masked[residue.start():].strip().split()[0]}', "
+            f"which is neither a qualified column of '{metric.grain}', a "
+            f"function name, nor a SQL keyword. Every token in a metric "
+            f"expression must be one of those three — an unrecognised token "
+            f"would render into SQL unchecked."
         )
 
 
@@ -180,6 +360,7 @@ def validate(onto: Ontology, metadata: MetaData) -> None:
             for pair in join.on:
                 _require_column(metadata, pair.from_, f"{ctx} join '{join_name}'")
                 _require_column(metadata, pair.to, f"{ctx} join '{join_name}'")
+            _check_join_cardinality(obj, join_name, join, metadata)
         for prop_name, prop in obj.properties.items():
             _require_column(metadata, prop.column, f"{ctx} property '{prop_name}'")
             if prop.via is not None and prop.via not in obj.joins:
@@ -198,6 +379,7 @@ def validate(onto: Ontology, metadata: MetaData) -> None:
                     f"namespace in the emitted SELECT — rename one of them."
                 )
             _check_nullability(obj, prop_name, prop, metadata)
+            _check_uniqueness(obj, prop_name, prop, metadata)
 
     for link in onto.links.values():
         ctx = f"link '{link.name}'"

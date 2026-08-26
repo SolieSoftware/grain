@@ -25,10 +25,13 @@ def test_two_distinct_routes_from_customer(chinook_ontology):
     assert {"Customer_Invoices", "Customer_SupportRep"} <= names
 
 
-def test_metrics_declare_three_distinct_grains(chinook_ontology):
+def test_metrics_declare_five_distinct_grains(chinook_ontology):
+    """`employee` joined the set with `employee_count`, which is what makes the
+    hierarchy question ("headcount under each manager, at any depth") expressible
+    at all — a traversal needs a metric at the grain being counted."""
     onto = chinook_ontology
     grains = {m.grain for m in onto.metrics.values()}
-    assert {"invoice_line", "invoice", "track", "customer"} == grains
+    assert {"invoice_line", "invoice", "track", "customer", "employee"} == grains
 
 
 def test_track_object_spans_three_tables(chinook_ontology):

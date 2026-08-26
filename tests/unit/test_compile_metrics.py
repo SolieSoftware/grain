@@ -173,8 +173,12 @@ def test_recursive_edge_in_a_metric_prefix_gets_its_own_cte_name(
     two recursive CTEs are built for one link. Every CTE in a statement is
     hoisted into the same top-level WITH, so identical names would make Postgres
     reject the whole statement as a duplicate CTE name."""
+    # `id` is in the group_by because traversing a recursive link walks the
+    # depth-bounded CLOSURE, which is many_to_many (see LinkType.
+    # effective_cardinality) -- so this query is non-additive and must group by a
+    # key that identifies one row, exactly as the playlist case must.
     sql = build(lite_with_employee_customers, lite_metadata, object="Employee",
-                group_by=["last_name"], metrics=["customer_count"],
+                group_by=["id", "last_name"], metrics=["customer_count"],
                 traverse=[Hop(link="Employee_Manager"), Hop(link="Employee_Customers"),
                           Hop(link="Customer_Invoices")])
     defined = re.findall(r"(employee_manager_cte\w*)\([a-z_, ]+\) AS ", sql)
@@ -208,8 +212,12 @@ def test_a_not_null_group_key_rejoins_with_plain_equality(
 ):
     """`employee.last_name` is NOT NULL in the schema, so the null-safe operator
     buys nothing and costs the optimiser a hash join."""
+    # `id` is in the group_by because traversing a recursive link walks the
+    # depth-bounded CLOSURE, which is many_to_many (see LinkType.
+    # effective_cardinality) -- so this query is non-additive and must group by a
+    # key that identifies one row, exactly as the playlist case must.
     sql = build(lite_with_employee_customers, lite_metadata, object="Employee",
-                group_by=["last_name"], metrics=["customer_count"],
+                group_by=["id", "last_name"], metrics=["customer_count"],
                 traverse=[Hop(link="Employee_Manager"), Hop(link="Employee_Customers"),
                           Hop(link="Customer_Invoices")])
     assert "IS NOT DISTINCT FROM" not in sql.upper()

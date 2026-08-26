@@ -24,9 +24,12 @@ objects:
       department:
         to: department
         kind: left
+        cardinality: many_to_one
         on: [{from: employee.department_id, to: department.department_id}]
     properties:
+      id: {column: employee.employee_id, type: integer, unique: true}
       last_name: {column: employee.last_name, type: string}
+      department: {column: department.name, type: string, via: department, nullable: true}
   Track:
     primary: track
     properties:
@@ -34,6 +37,7 @@ objects:
   Playlist:
     primary: playlist
     properties:
+      id: {column: playlist.playlist_id, type: integer, unique: true}
       name: {column: playlist.name, type: string, nullable: true}
 links:
   Customer_Invoices:
@@ -96,6 +100,10 @@ metrics:
     grain: playlist
     expr: "count(distinct playlist.playlist_id)"
     type: integer
+  employee_count:
+    grain: employee
+    expr: "count(distinct employee.employee_id)"
+    type: integer
 """
 
 
@@ -108,17 +116,21 @@ def lite_metadata():
     # the loader refuses any declaration that under-states it. A fixture where
     # everything defaulted to nullable would exercise only one of those branches
     # and would misreport which properties may legally declare `nullable: false`.
+    # Primary keys are declared, not decorative either: the loader checks every
+    # `cardinality` on an object join and every `unique: true` property against
+    # the keys the DATABASE enforces (_unique_column_sets), so a fixture with no
+    # keys would make those declarations unverifiable and the checks untested.
     Table(
         "customer",
         md,
-        Column("customer_id", Integer, nullable=False),
+        Column("customer_id", Integer, primary_key=True, nullable=False),
         Column("country", String),  # genuinely nullable in chinook
         Column("support_rep_id", Integer),
     )
     Table(
         "invoice",
         md,
-        Column("invoice_id", Integer, nullable=False),
+        Column("invoice_id", Integer, primary_key=True, nullable=False),
         Column("customer_id", Integer, nullable=False),
         Column("total", Numeric, nullable=False),
         Column("invoice_date", DateTime, nullable=False),
@@ -126,7 +138,7 @@ def lite_metadata():
     Table(
         "invoice_line",
         md,
-        Column("invoice_line_id", Integer, nullable=False),
+        Column("invoice_line_id", Integer, primary_key=True, nullable=False),
         Column("invoice_id", Integer, nullable=False),
         Column("unit_price", Numeric, nullable=False),
         Column("quantity", Integer, nullable=False),
@@ -135,7 +147,7 @@ def lite_metadata():
     Table(
         "employee",
         md,
-        Column("employee_id", Integer, nullable=False),
+        Column("employee_id", Integer, primary_key=True, nullable=False),
         Column("reports_to", Integer),
         Column("last_name", String, nullable=False),
         Column("department_id", Integer),
@@ -143,12 +155,12 @@ def lite_metadata():
     Table(
         "department",
         md,
-        Column("department_id", Integer, nullable=False),
+        Column("department_id", Integer, primary_key=True, nullable=False),
         Column("name", String, nullable=False),
     )
-    Table("track", md, Column("track_id", Integer, nullable=False),
+    Table("track", md, Column("track_id", Integer, primary_key=True, nullable=False),
           Column("name", String, nullable=False), Column("album_id", Integer))
-    Table("playlist", md, Column("playlist_id", Integer, nullable=False),
+    Table("playlist", md, Column("playlist_id", Integer, primary_key=True, nullable=False),
           Column("name", String))  # playlist.name is nullable in chinook
     Table("playlist_track", md, Column("playlist_id", Integer, nullable=False),
           Column("track_id", Integer, nullable=False))

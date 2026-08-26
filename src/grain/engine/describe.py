@@ -51,13 +51,57 @@ from .ontology import AiContext, Ontology
 NON_ADDITIVITY_RULE = (
     "A metric grouped by a dimension reached through a many_to_many link is "
     "non-additive -- the groups overlap, and the column will not sum to the total. "
-    "Each group is still correct on its own."
+    "Each group is still correct on its own, PROVIDED the group_by keys identify "
+    "one row of the queried object: include a property marked 'unique'. A "
+    "non-additive query that groups by no unique key, or by nothing at all, has no "
+    "correct rendering and is refused rather than flagged."
 )
+"""The proviso is not hedging; it is the condition the per-group guarantee
+actually depends on. Stated unconditionally, this sentence was published to the
+agent as a domain fact while being false for chinook's duplicate playlist names,
+where two playlists merged into one group and everything they shared was counted
+twice (defect C2). `grain.analyse` now enforces what this sentence claims, so the
+rule and the engine agree."""
 
 GRAIN_RULE = (
     "Every metric is aggregated at its declared grain. If the query path fans out "
     "relative to that grain, the engine rewrites the query rather than double-counting, "
     "and reports the rewrite. If it cannot, it refuses and names the alternative."
+)
+
+DOTTED_FILTER_RULE = (
+    "A dotted filter ('Customer_Invoices.total > 10') selects which ROOT objects the "
+    "query is about -- every Customer having at least one invoice over 10 -- and not "
+    "which of their rows are measured. It changes the POPULATION, not the rows: the "
+    "metrics then cover all of each selected object's data, including its invoices "
+    "under 10. To restrict the rows being measured instead, make that object the "
+    "query's own 'object' and filter it by a bare property name."
+)
+"""Published because the semantics are not guessable from the spec's shape, and
+the two readings differ by a lot: on this database 'invoice_total where the
+invoice is over 10' returns 2328.60 over 412 invoices under the population
+reading, against 942.32 over 64 under the row reading (defect I2). Every dotted
+filter compiles to EXISTS, whether or not the same link is also traversed."""
+
+TRAVERSED_KEY_RULE = (
+    "A group_by key may be qualified by a link the query traverses "
+    "('Employee_Manager.last_name') to read a property of the object that hop lands "
+    "on, rather than of the queried object. The link must appear in 'traverse', and "
+    "must appear there only once — a qualified key names a link, not a hop, so it "
+    "cannot say which of two identical hops is meant. A bare key always means a "
+    "property of the query's own object."
+)
+
+RECURSIVE_LINK_RULE = (
+    "Traversing a recursive link walks the whole chain, not one step: each row is "
+    "paired with every ancestor up to the link's max_depth. That closure is "
+    "many_to_many however the link declares its one-hop cardinality — a row has many "
+    "ancestors and an ancestor has many rows below it — so a metric over such a "
+    "traversal is non-additive, and must group by a property marked 'unique' on the "
+    "traversed object. Set a hop's max_depth to 1 to ask for the immediate parent "
+    "only, which is additive. A row with no parent has no ancestors and drops out, "
+    "as it does across any many_to_one link. A dotted FILTER on a recursive link is "
+    "one step, never the chain."
 )
 
 GRAIN_MATCHING_RULE = (
@@ -110,6 +154,11 @@ def _describe_object(onto: Ontology, name: str) -> dict[str, Any]:
             p: {
                 "type": prop.type,
                 "nullable": prop.nullable,
+                # Published because NON_ADDITIVITY_RULE tells the agent to group
+                # by a unique property, and a rule naming a fact the agent
+                # cannot see is not actionable. This is the one property flag
+                # that changes whether a query is answerable.
+                "unique": prop.unique,
                 "description": prop.description,
             }
             for p, prop in obj.properties.items()
@@ -138,6 +187,9 @@ def describe(onto: Ontology, object_name: str | None = None) -> dict[str, Any]:
             "grain": GRAIN_RULE,
             "non_additivity": NON_ADDITIVITY_RULE,
             "grain_matching": GRAIN_MATCHING_RULE,
+            "dotted_filters": DOTTED_FILTER_RULE,
+            "traversed_keys": TRAVERSED_KEY_RULE,
+            "recursive_links": RECURSIVE_LINK_RULE,
         },
         "objects": {name: _describe_object(onto, name) for name in names},
         "links": {

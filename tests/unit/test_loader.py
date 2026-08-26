@@ -121,7 +121,7 @@ def test_a_property_through_a_left_join_may_not_declare_not_null(metadata):
     """The outer join manufactures NULLs for unmatched rows whatever the column
     itself says, so the declaration is unachievable however the DDL reads."""
     md = metadata
-    Table("region", md, Column("region_id", Integer, nullable=False),
+    Table("region", md, Column("region_id", Integer, primary_key=True, nullable=False),
           Column("name", String, nullable=False))
     md.tables["customer"].append_column(Column("region_id", Integer))
     bad = GOOD.replace(
@@ -135,6 +135,7 @@ def test_a_property_through_a_left_join_may_not_declare_not_null(metadata):
       region:
         to: region
         kind: left
+        cardinality: many_to_one
         on: [{from: customer.region_id, to: region.region_id}]
     properties:
       country: {column: customer.country, type: string}

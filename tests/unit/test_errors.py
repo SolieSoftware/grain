@@ -1,4 +1,3 @@
-import pytest
 from grain.engine.errors import (
     GrainError, UnknownName, NoPath, AmbiguousPath, FanOutRefused, GuardTripped,
 )
