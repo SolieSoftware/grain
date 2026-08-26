@@ -3,11 +3,14 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development, and not yet sound enough to rely on.** All 16 planned
-tasks are complete and 170 tests pass, but a whole-branch review found **five
-critical defects** that are not yet fixed. See *"Known defects"* below before
-trusting any number this produces. The comparison that would justify the project —
-against raw text-to-SQL — has also **not been run**.
+**Status: in development.** All 16 planned tasks are complete and **241 tests
+pass**. The **five critical defects** a whole-branch review found on 2026-08-18
+were fixed on 2026-08-24, each with a measured regression test at the facade —
+see *"Defects found and fixed"* below. **I3** (recursive traversal) is fixed too,
+by building the qualified-group-key mechanism it needed.
+
+The comparison that would justify the project — against raw text-to-SQL — has
+still **not been run**, and there is still only one domain pack.
 
 ---
 
@@ -67,14 +70,18 @@ access:
 
 Plus an orthogonal **`additive`** flag: a query can be correctly computed *and*
 non-additive, when the path to a dimension crosses a many-to-many. `revenue` by
-`Playlist` returns groups summing to 5738.28 against a true 2328.60 — the total is
-meaningless by construction, so it flags rather than refuses, because the per-group
-numbers are what the question asked for.
+`Playlist` returns 12 groups summing to 5738.28 against a true 2328.60 — the total
+is meaningless by construction, so it flags rather than refuses, because the
+per-group numbers are what the question asked for.
 
-> ⚠️ **Correction.** An earlier version of this README claimed those were *"10
-> correct groups"*. They are not. Chinook ships duplicate playlist names, and the
-> per-group correctness guarantee silently assumes one group equals one root row —
-> so groups whose name collides double-count. See defect **C2** below.
+That per-group guarantee has one condition, and the engine now **enforces** it
+rather than asserting it: a group must be one row of the root object. So the
+non-additive query above is legal only when `group_by` includes a property the
+ontology declares `unique` (`Playlist.id`), and is **refused** when it groups by
+`name` — which two Chinook playlists share — or by nothing at all. Grouped by
+identity, playlists 1 and 8 are both 2107.71, each exactly the distinct-track
+revenue it holds. Grouped by name they were one group of 4215.42. See **C1** and
+**C2**.
 
 ## Layers
 
@@ -85,9 +92,22 @@ numbers are what the question asked for.
 | Engine | resolve → grain analysis → compile → guard → execute | **No** |
 | Adapters | library · CLI · MCP | No |
 
+### What the ontology must declare
+
+Two of these are load-bearing rather than descriptive, and the loader checks both
+against the database's own primary keys, unique constraints and unique indexes —
+a declaration nothing verifies is a silent assumption with a field name attached.
+
+| Declaration | Where | Rule |
+|---|---|---|
+| `cardinality` | every **link** | Decides inline / rewrite / refuse |
+| `cardinality` | every **object join** | **Required, no default.** Must be non-fanning, and the `to` side must be a key the database enforces. A fanning object join is refused: model it as a link |
+| `unique` | a **property** | Declares that it identifies one row of its object. Required in the `group_by` of any non-additive query, and what lets a fanning hop be answered inline |
+| `max_depth` | a **recursive link** | How far a traversal walks the chain. `1` on a hop means the immediate parent only |
+
 **The architecture test:** pointing grain at a second database must not require
 editing anything under `engine/`. Adding the complete Chinook pack — 10 objects,
-9 links, 5 metrics — required zero engine changes. A genuinely different database
+9 links, 6 metrics — required zero engine changes. A genuinely different database
 has not been tried yet.
 
 ## Layout
@@ -107,39 +127,107 @@ docs/plans/                  the implementation plan this was built from
 uv venv && uv pip install -e ".[dev,mcp]"
 cp .env.example .env          # then set GRAIN_DATABASE_URL
 set -a && . ./.env && set +a
-uv run pytest -q              # 170 passing
+uv run pytest -q              # 241 passing
+uv run ruff check src tests   # clean
 ```
 
 Unit tests need no database. Integration tests skip without `GRAIN_DATABASE_URL`,
 so a bare `pytest` run reporting green may have tested nothing — check the skip
-summary.
+summary (`190 passed, 51 skipped` is the no-database baseline).
+
+`pyproject.toml` promotes `SAWarning` to an error. That is not tidiness: a
+SQLAlchemy cartesian-product warning is a *wrong answer* announcing itself, and
+defect C3 shipped four such specs because nothing turned the warning into a
+failure.
+
+From a standing start on macOS, the database is:
+
+```bash
+brew install postgresql@17 && brew services start postgresql@17
+curl -sSLO https://github.com/lerocha/chinook-database/releases/download/v1.4.5/Chinook_PostgreSql_SerialPKs.sql
+createdb chinook
+grep -v -E '^(DROP DATABASE|CREATE DATABASE|\\c chinook_serial)' \
+  Chinook_PostgreSql_SerialPKs.sql | psql -q -v ON_ERROR_STOP=1 -d chinook
+```
 
 The database is Chinook v1.4.5, loaded from `Chinook_PostgreSql_SerialPKs.sql`
 (the snake_case variant; the default port uses quoted CamelCase).
 
-## Known defects
+## Defects found and fixed
 
-Found by a whole-branch review on 2026-08-18, **not yet fixed**. All were
-demonstrated with measured numbers. The pattern: the engine defends the *grain*
-axis rigorously and the *population* axis — which rows, which groups, which entity
-— not at all.
+A whole-branch review on 2026-08-18 found five criticals; all were demonstrated
+with measured numbers and all were fixed on 2026-08-24. The pattern is worth
+keeping: **the engine defended the *grain* axis rigorously and the *population*
+axis — which rows, which groups, which entity — not at all.** Four of the five
+produced correct-looking SQL, so every regression test for them asserts a number
+at the facade rather than inspecting a statement.
 
-| | Defect |
-|---|---|
-| **C1** | A non-additive metric with **no `group_by`** returns the over-counted total with no refusal. The flagship example above, with the GROUP BY removed, returns 5738.28 as a single unlabelled figure |
-| **C2** | Per-group correctness assumes one group = one root row. Chinook has duplicate playlist names, so colliding groups double-count — and `describe()` publishes "each group is still correct" to the agent as fact |
-| **C3** | A dotted filter on a property reached through an *object join* compiles to a **cartesian product**. Four specs in the shipped ontology hit it. SQLAlchemy warns; nothing turns warnings into failures |
-| **C4** | The metric-expression grain check is case-sensitive while SQL identifiers are not, so `sum(INVOICE.TOTAL)` bypasses validation entirely and can reintroduce the 8.95× over-count |
-| **C5** | `ObjectType.joins` declares **no cardinality**, so the claim that every verdict comes from declared cardinality alone is currently false — object joins are silently assumed many-to-one |
+| | Defect | Was | Now |
+|---|---|---|---|
+| **C1** | Non-additive metric with **no `group_by`** | 5738.28 as one unlabelled figure, `additive: false` attached, truth 2328.60 | `NonAdditiveRefused`, naming `group_by Playlist.id` |
+| **C2** | Per-group correctness assumed one group = one root row | Two playlists named `Music` merged into one group of 4215.42 for 2107.71 of distinct-track revenue, while `describe()` published "each group is still correct" as fact | A non-additive query must group by a property declared `unique`, checked against the database's own keys; the rule now states its own condition |
+| **C3** | Dotted filter through an *object join* | Cartesian product: 347 of 347 albums returned for a Jazz filter matching 13, a Rock-only album among them. Four shipped specs hit it | EXISTS is built from the link's target *object* and the `via` join applied inside it. 13 = 13, and `-W error::SAWarning` makes a recurrence a test failure |
+| **C4** | Metric-expression guard case-sensitive, SQL identifiers not | `sum(INVOICE.TOTAL)` at `invoice_line` grain matched neither regex, loaded clean, returned **20848.62** | Case-folded comparison, and any token no classifier recognised is an error rather than a pass. Window-frame keywords also accepted, so a legal windowed metric loads |
+| **C5** | `ObjectType.joins` declared **no cardinality** | Two fanning object joins returned `sum(thing.weight)` = 6 for a truth of 3, reported `additive: true` with no rewrites | `cardinality` is required on every `TableJoin`, verified against the database's keys; a *fanning* object join is refused at load, naming links as the alternative |
 
-Also: `order_by` is accepted and never read (combined with a default `limit` of 100,
-"top 10 by revenue" returns 10 arbitrary rows); a dotted filter changes the
-*population* rather than the rows, which is documented nowhere; recursive traversal
-silently drops orphans and returns the wrong entity.
+Of the important items: **I1** (`order_by` accepted and never read — "top 10 by
+revenue" returned 10 arbitrary countries, omitting USA, the largest) is
+implemented, with an unhonourable key now a typed error and a `limit_reached`
+flag on the result. **I2** (a dotted filter changes the *population*, not the
+rows) is intended behaviour that was documented nowhere; it is now published to
+the agent as a rule in `describe()`. **I4** (the AST boundary test missed
+`from X import Y` and every relative-import form) and **I5** (two CLI tests
+failing rather than skipping without a database) are fixed.
 
-**The narrow claim that survives:** the figure **20848.62 specifically** is
-unreachable, and the core grain algorithm withstood direct attack. Numbers of the
-same character are not yet unreachable.
+**I3, recursive traversal, is fixed by building the feature it needed.** A
+`traverse` hop over a recursive link used to join each row to *its own* CTE row:
+it added no column a caller could name — `resolve()` built `group_by` from the
+root object only — and its only observable effect was silently dropping rows not
+reachable from a root. Three parts, described below: qualified group keys, an
+ancestor-shaped CTE, and a per-position alias environment in the compiler.
+
+## Traversing a hierarchy
+
+```python
+g.query(QuerySpec(
+    object="Employee",
+    group_by=["Employee_Manager.id", "Employee_Manager.last_name"],
+    metrics=["employee_count"],
+    traverse=[Hop(link="Employee_Manager")],
+    order_by=[OrderBy(key="employee_count", desc=True)],
+))
+# (1, 'Adams', 7), (2, 'Edwards', 3), (6, 'Mitchell', 2)   additive=False
+```
+
+Checked against hand-written recursive SQL. Three things make it work:
+
+- **A group key may be qualified by a traversed link.** `Employee_Manager.last_name`
+  is a property of the object that hop lands on, not of the queried object. The
+  link must be traversed, and must appear once — a qualified key names a link, not
+  a hop.
+- **A recursive traversal walks the closure, so its effective cardinality is
+  `many_to_many`** whatever its one-hop `cardinality` declares. A row has many
+  ancestors and an ancestor has many rows beneath it, so the query is non-additive
+  and needs a `unique` group key — the same machinery C2 added. `Hop(max_depth=1)`
+  means the immediate parent, which is additive and sums to 7.
+- **A fanning edge pinned by a unique key at its own position needs no rewrite.**
+  Its copies land in distinct groups, so within any group the metric's row appears
+  exactly once. This is the mirror of `revenue` by `Playlist`, which the engine
+  already answered that way: correct per group, meaningless as a total.
+
+Without a pinning key the same query is **refused** (`KeyBeyondGrain`): a
+pre-aggregate has to carry every group key, and walking far enough to reach one
+past a fanning edge would replicate the metric's rows inside the subquery built to
+prevent exactly that. Those refusals are the "our mechanism cannot express this"
+class the symmetric-aggregates decision is waiting to have counted.
+
+Deliberately narrow: the key must sit at the fanning edge's *own* position. A key
+further along determines the row at that edge only when every edge in between is
+functional in reverse — `Playlist → Playlist_Tracks (m2m) → Track_Album (m2o)`
+grouped by album is the counterexample, since one album does not determine which
+track, so a playlist holding two tracks from one album would appear twice in that
+album's group. The wider rule is a non-goal until something measures that it is
+needed.
 
 ## What is not done
 
