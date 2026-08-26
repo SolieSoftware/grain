@@ -125,15 +125,41 @@ docs/plans/                  the implementation plan this was built from
 
 ```bash
 uv venv && uv pip install -e ".[dev,mcp]"
-cp .env.example .env          # then set GRAIN_DATABASE_URL
+cp .env.example .env          # then set GRAIN_DATABASE_URL — see below
 set -a && . ./.env && set +a
 uv run pytest -q              # 241 passing
 uv run ruff check src tests   # clean
 ```
 
-Unit tests need no database. Integration tests skip without `GRAIN_DATABASE_URL`,
-so a bare `pytest` run reporting green may have tested nothing — check the skip
-summary (`190 passed, 51 skipped` is the no-database baseline).
+### The connection URL is load-bearing
+
+Unit tests need no database. Integration tests — every test that measures a real
+number against chinook — need `GRAIN_DATABASE_URL`, and two of the three ways the
+run can end report something other than success:
+
+| `GRAIN_DATABASE_URL` | `pytest -q` |
+|---|---|
+| unset | `190 passed, 51 skipped` |
+| `postgresql://user@localhost/chinook` | `3 failed, 190 passed, 48 errors` |
+| `postgresql+psycopg://user@localhost:5432/chinook` | `241 passed` |
+
+Only the third form runs the measured integration tests:
+
+```bash
+export GRAIN_DATABASE_URL="postgresql+psycopg://user@localhost:5432/chinook"
+```
+
+The `+psycopg` suffix is what selects the psycopg 3 dialect. Given a bare
+`postgresql://` scheme, SQLAlchemy reaches for psycopg2 instead — which this project
+does not depend on, since it depends on `psycopg[binary]>=3.1` — and every
+integration test then errors at fixture setup with `ModuleNotFoundError: No module
+named 'psycopg2'`.
+
+The unset case is the one to watch, because it reports green. **A run that skipped
+51 tests is the exact failure mode this branch exists to prevent:** four of the five
+criticals below returned plausible wrong numbers, so every regression test for them
+asserts a measured value against the database. Skipped, they assert nothing. Check
+the skip count, not the colour.
 
 `pyproject.toml` promotes `SAWarning` to an error. That is not tidiness: a
 SQLAlchemy cartesian-product warning is a *wrong answer* announcing itself, and
