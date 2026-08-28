@@ -31,24 +31,36 @@ def test_query_returns_rows_and_compiled_sql(g):
 
 
 def test_rewrite_is_surfaced_when_the_engine_changes_the_query(g):
-    # NOTE: the brief's draft of this test used metrics=["revenue"], but
-    # revenue's grain is invoice_line -- the END of this exact traversal, so
-    # nothing fans out downstream of it and the correct plan is "inline" (see
-    # tests/unit/test_grain.py::test_metrics_at_two_grains_each_get_their_own_plan,
-    # which pins strategies == {"revenue": "inline", "customer_count":
-    # "aggregate_then_join"} for this identical spec). Asserting a rewrite for
-    # revenue here would assert a regression, not a requirement -- verified
-    # live against the database before changing it. customer_count's grain is
-    # the ROOT (customer), so the whole traversal is downstream of it and the
-    # first fanning hop, Customer_Invoices, is what forces the rewrite.
+    # The brief's draft used metrics=["revenue"], but revenue's grain is
+    # invoice_line -- the END of this exact traversal -- so nothing fans out
+    # downstream of it and the correct plan is "inline".
+    #
+    # This test then used customer_count, whose grain is the ROOT, so the whole
+    # traversal was downstream of it. That stopped rewriting once metrics gained
+    # a structured declaration: customer_count is count(distinct customer_id),
+    # and DISTINCT already undoes the replication a fanning join causes, so the
+    # engine no longer builds a subquery it never needed. The rewrite this used
+    # to assert was wasted work, not a requirement.
+    #
+    # invoice_total is what genuinely still rewrites here: its grain is invoice,
+    # so Invoice_Lines fans out downstream of it and its rows really are
+    # replicated.
+    result = g.query(QuerySpec(
+        object="Customer", group_by=["country"], metrics=["invoice_total"], limit=100,
+        traverse=[Hop(link="Customer_Invoices"), Hop(link="Invoice_Lines")]))
+    assert len(result.rewrites) == 1
+    assert result.rewrites[0].metric == "invoice_total"
+    assert result.rewrites[0].strategy == "aggregate_then_join"
+    assert result.rewrites[0].forced_by == "Invoice_Lines"
+
+
+def test_an_immune_metric_needs_no_rewrite(g):
+    """The other side of the same change: count(distinct pk) over the identical
+    fanning traversal reports NO rewrite, because it never needed one."""
     result = g.query(QuerySpec(
         object="Customer", group_by=["country"], metrics=["customer_count"], limit=100,
         traverse=[Hop(link="Customer_Invoices"), Hop(link="Invoice_Lines")]))
-    assert len(result.rewrites) == 1
-    assert result.rewrites[0].metric == "customer_count"
-    assert result.rewrites[0].strategy == "aggregate_then_join"
-    assert result.rewrites[0].forced_by == "Customer_Invoices"
-
+    assert result.rewrites == []
 
 def test_no_rewrite_is_reported_when_none_happened(g):
     result = g.query(QuerySpec(object="Customer", group_by=["country"],

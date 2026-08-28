@@ -261,8 +261,21 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
         # needs no rewrite. See `_pinned_by_a_unique_key`.
         separated = [(i, e) for i, e in fanning if _pinned_by_a_unique_key(rq, i)]
         unpinned = [(i, e) for i, e in fanning if not _pinned_by_a_unique_key(rq, i)]
-        strategy: Strategy = "inline" if not unpinned else "aggregate_then_join"
-        forced_by = unpinned[0][1].link.name if unpinned else None
+        # A fan-out-immune aggregate cannot be changed by replication, so no
+        # edge -- fanning or not -- forces a rewrite for it. The aggregate alone
+        # settles this, which is why it overrides the path entirely.
+        #
+        # STRATEGY ONLY. Additivity below is untouched: `count(distinct x)`
+        # grouped across a many_to_many still produces overlapping groups, and a
+        # track on two playlists is still counted in both. Immunity is about
+        # replication INSIDE a group; overlap is a property of the path.
+        immune = metric.fanout_immune
+        strategy: Strategy = (
+            "inline" if immune or not unpinned else "aggregate_then_join"
+        )
+        forced_by = (
+            None if immune else (unpinned[0][1].link.name if unpinned else None)
+        )
 
         # A qualified group key lives at a position on the path, so a
         # pre-aggregating subquery has to walk far enough to carry it. If that is
@@ -272,7 +285,24 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
         reach = [rp for rp in rq.group_by if rp.edge_index is not None]
         needed = max([rp.edge_index + 1 for rp in reach], default=0)
         subquery_edges = max(len(prefix), needed)
-        if strategy == "aggregate_then_join" and needed > len(prefix):
+        # Gated on `unpinned` -- would a rewrite have been forced? -- NOT on the
+        # final strategy, so immunity cannot lift this refusal.
+        #
+        # It is tempting to lift it: an immune metric builds no subquery, so a
+        # key beyond its grain costs it nothing. But this refusal is also, and
+        # accidentally, the only thing preventing a WRONG ADDITIVE VERDICT.
+        # `employee_count` grouped by an ancestor's surname puts one employee in
+        # every ancestor group above them, so the column cannot sum to the
+        # total -- yet the additivity loop below iterates `prefix`, which is
+        # EMPTY for a metric measured at the root, so it never sees the
+        # many_to_many and would report `additive: true`.
+        #
+        # Lifting the refusal therefore requires fixing overlap detection to
+        # follow the path to the GROUP KEY rather than to the grain. That is the
+        # symmetric engine's job, where lifting this is a stated deliverable.
+        # Until then immunity changes only which SQL is emitted, never which
+        # queries are answerable.
+        if unpinned and needed > len(prefix):
             blocking = next(
                 (e for e in rq.path[len(prefix):needed] if e.link.fans_out), None
             )

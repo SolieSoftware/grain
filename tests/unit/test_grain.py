@@ -105,7 +105,12 @@ def test_refusal_always_names_a_legal_next_move(chinook_lite):
             "metrics": {
                 name: metric
                 for name, metric in chinook_lite.metrics.items()
-                if name != "employee_count"
+                # Filtered by GRAIN, not by name: this test needs NO
+                # employee-grain metric to survive, so that the only alternative
+                # left is the "query Customer instead" repair. Naming one metric
+                # was enough until the fixture gained a second employee-grain
+                # metric, at which point the filter silently stopped working.
+                if metric.grain != "employee"
             }
         }
     )

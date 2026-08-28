@@ -82,11 +82,13 @@ links:
 metrics:
   revenue:
     grain: invoice_line
-    expr: "sum(invoice_line.unit_price * invoice_line.quantity)"
+    agg: sum
+    value: "invoice_line.unit_price * invoice_line.quantity"
     type: decimal
   invoice_total:
     grain: invoice
-    expr: "sum(invoice.total)"
+    agg: sum
+    value: "invoice.total"
     type: decimal
   customer_count:
     grain: customer
@@ -103,6 +105,21 @@ metrics:
   employee_count:
     grain: employee
     expr: "count(distinct employee.employee_id)"
+    type: integer
+  distinct_customers:
+    grain: customer
+    agg: count_distinct
+    value: "customer.customer_id"
+    type: integer
+  distinct_tracks:
+    grain: track
+    agg: count_distinct
+    value: "track.track_id"
+    type: integer
+  distinct_employees:
+    grain: employee
+    agg: count_distinct
+    value: "employee.employee_id"
     type: integer
 """
 
