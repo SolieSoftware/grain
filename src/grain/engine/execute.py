@@ -71,6 +71,14 @@ class Result:
     non_additive_reason: str | None = None
     limit_reached: bool = False
     ontology_elements_used: list[str] = field(default_factory=list)
+    engine: str = "subquery"
+    """Which engine produced this.
+
+    A result that cannot say which engine answered is not comparable, and
+    comparing two engines is the entire reason the seam exists. Defaulted so
+    that a caller constructing a `Result` directly in a test does not have to
+    care, but the facade always sets it explicitly.
+    """
 
 
 def execute(

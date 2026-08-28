@@ -13,13 +13,13 @@ from typing import Any
 
 from sqlalchemy import Engine, MetaData
 
-from .compile import compile_query, sql_text
-from .execute import Result, Rewrite, execute
-from .grain import GrainPlan, analyse
+from ..plan import EnginePlan, engine_names, get_engine
+from . import adapter  # noqa: F401  -- import registers the "subquery" engine
+from .compile import sql_text
+from .execute import Result, execute
 from .guard import GuardConfig
 from .loader import load_ontology
 from .ontology import Ontology
-from .resolve import ResolvedQuery, resolve
 from .spec import QuerySpec
 
 
@@ -34,15 +34,26 @@ class Grain:
         metadata: MetaData,
         engine: Engine,
         guard: GuardConfig | None = None,
+        engine_name: str = "subquery",
     ) -> None:
         self.ontology = ontology
         self.metadata = metadata
         self.engine = engine
         self.guard = guard or GuardConfig()
+        # Held as a NAME, not an instance: the name is what a caller passes,
+        # what the CLI flag carries, and what the Result reports back. Resolved
+        # per call so a registry populated by a later import still works.
+        if engine_name not in engine_names():
+            get_engine(engine_name)  # raises, naming the legal engines
+        self.engine_name = engine_name
 
     @classmethod
     def load(
-        cls, domain_dir: Path | str, engine: Engine, guard: GuardConfig | None = None
+        cls,
+        domain_dir: Path | str,
+        engine: Engine,
+        guard: GuardConfig | None = None,
+        engine_name: str = "subquery",
     ) -> "Grain":
         """`domain_dir` is a directory holding `ontology.yaml` -- a path, not
         a Python import. `src/grain/domains/chinook` happens to also be an
@@ -53,25 +64,13 @@ class Grain:
         metadata = MetaData()
         metadata.reflect(bind=engine)
         ontology = load_ontology(domain_dir / "ontology.yaml", metadata)
-        return cls(ontology, metadata, engine, guard)
+        return cls(ontology, metadata, engine, guard, engine_name)
 
-    def _plan(self, spec: QuerySpec) -> tuple[ResolvedQuery, GrainPlan, Any]:
-        rq = resolve(spec, self.ontology)
-        plan = analyse(rq)
-        stmt = compile_query(rq, plan, self.metadata)
-        return rq, plan, stmt
-
-    def _rewrites(self, plan: GrainPlan) -> list[Rewrite]:
-        return [
-            Rewrite(
-                metric=mp.metric.name,
-                strategy=mp.strategy,
-                forced_by=mp.forced_by,
-                reason=f"{mp.forced_by} is {self.ontology.links[mp.forced_by].cardinality}",
-            )
-            for mp in plan.metric_plans
-            if mp.forced_by
-        ]
+    def _plan(self, spec: QuerySpec) -> EnginePlan:
+        """Everything from the spec to the SQL belongs to the engine. This
+        facade reads only `EnginePlan`, never an engine's own types -- each
+        engine has its own resolver, so those types are not shared."""
+        return get_engine(self.engine_name).plan(spec, self.ontology, self.metadata)
 
     def describe(self, object: str | None = None) -> dict[str, Any]:
         """How the agent learns the domain, in place of the DDL. See
@@ -87,9 +86,10 @@ class Grain:
         caller that only checked truthiness of `out.get("rows")` could
         otherwise mistake an empty list for 'nothing to show' instead of
         'never asked'."""
-        rq, plan, stmt = self._plan(spec)
+        ep = self._plan(spec)
         return {
-            "compiled_sql": sql_text(stmt),
+            "engine": self.engine_name,
+            "compiled_sql": sql_text(ep.stmt),
             "rewrites": [
                 {
                     "metric": r.metric,
@@ -97,35 +97,28 @@ class Grain:
                     "forced_by": r.forced_by,
                     "reason": r.reason,
                 }
-                for r in self._rewrites(plan)
+                for r in ep.rewrites
             ],
-            "additive": plan.additive,
-            "non_additive_reason": plan.non_additive_reason,
-            "ontology_elements_used": self._ontology_elements_used(rq),
+            "additive": ep.additive,
+            "non_additive_reason": ep.non_additive_reason,
+            "ontology_elements_used": ep.ontology_elements_used,
         }
 
     def query(self, spec: QuerySpec) -> Result:
-        rq, plan, stmt = self._plan(spec)
-        rows, columns = execute(self.engine, stmt, self.guard)
+        ep = self._plan(spec)
+        rows, columns = execute(self.engine, ep.stmt, self.guard)
         return Result(
             rows=rows,
             columns=columns,
-            compiled_sql=sql_text(stmt),
-            rewrites=self._rewrites(plan),
-            additive=plan.additive,
-            non_additive_reason=plan.non_additive_reason,
+            compiled_sql=sql_text(ep.stmt),
+            rewrites=ep.rewrites,
+            additive=ep.additive,
+            non_additive_reason=ep.non_additive_reason,
             # Exactly `limit` rows means there may be more that were never
             # fetched. Reported rather than left for the caller to infer: the
             # inference requires knowing the limit the caller may not have set
             # itself (it defaults to 100).
-            limit_reached=rq.limit is not None and len(rows) == rq.limit,
-            ontology_elements_used=self._ontology_elements_used(rq),
-        )
-
-    @staticmethod
-    def _ontology_elements_used(rq: ResolvedQuery) -> list[str]:
-        return (
-            [rq.root.name]
-            + [edge.link.name for edge in rq.path]
-            + [metric.name for metric in rq.metrics]
+            limit_reached=ep.limit is not None and len(rows) == ep.limit,
+            ontology_elements_used=ep.ontology_elements_used,
+            engine=self.engine_name,
         )

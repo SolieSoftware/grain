@@ -27,3 +27,22 @@ def test_explain_emits_sql_without_executing(db_url):
                        "metrics": ["customer_count"]})
     out = json.loads(run_cli("explain", "--spec", spec).stdout)
     assert "SELECT" in out["compiled_sql"].upper()
+
+
+def test_engine_is_reported_in_explain_output(db_url):
+    spec = json.dumps({"object": "Customer", "group_by": ["country"],
+                       "metrics": ["customer_count"]})
+    out = json.loads(run_cli("explain", "--engine", "subquery", "--spec", spec).stdout)
+    assert out["engine"] == "subquery"
+
+
+def test_an_unknown_engine_is_refused_with_the_legal_names(db_url):
+    """argparse `choices` comes from the registry, so this cannot drift from
+    what is actually registered."""
+    proc = subprocess.run(
+        [sys.executable, "-m", "grain.engine.cli", "explain", "--engine", "nope",
+         "--spec", "{}"],
+        capture_output=True, text=True, check=False,
+    )
+    assert proc.returncode != 0
+    assert "subquery" in proc.stderr

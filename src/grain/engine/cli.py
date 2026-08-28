@@ -10,6 +10,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 
+from ..plan import engine_names
 from .api import Grain
 from .spec import QuerySpec
 
@@ -26,6 +27,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spec", help="QuerySpec as JSON")
     parser.add_argument("--object", help="object name, for describe")
     parser.add_argument("--domain", default=None, help="path to a domain pack directory")
+    # `choices` comes from the registry, so an unknown engine is refused with
+    # the legal names and the flag cannot drift from what is actually registered.
+    parser.add_argument(
+        "--engine",
+        default="subquery",
+        choices=sorted(engine_names()),
+        help="which query engine to use (default: subquery)",
+    )
     args = parser.parse_args(argv)
 
     url = os.environ.get("GRAIN_DATABASE_URL")
@@ -39,7 +48,9 @@ def main(argv: list[str] | None = None) -> int:
         from grain.domains.chinook import CHINOOK_DIR
         domain_dir = CHINOOK_DIR
 
-    g = Grain.load(domain_dir, create_engine(url, future=True))
+    g = Grain.load(
+        domain_dir, create_engine(url, future=True), engine_name=args.engine
+    )
 
     if args.command == "describe":
         print(json.dumps(g.describe(args.object), indent=2, default=_default))
@@ -63,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         "additive": result.additive,
         "non_additive_reason": result.non_additive_reason,
         "limit_reached": result.limit_reached,
+        "engine": result.engine,
     }, indent=2, default=_default))
     return 0
 
