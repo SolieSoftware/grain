@@ -308,7 +308,13 @@ def _validate_metric_expr(metric: Metric, metadata: MetaData) -> None:
 
     # Numbers first: masked here, they can never be mistaken for identifiers by
     # either classifier below, nor left behind as residue.
-    masked = NUMBER.sub(" ", metric.expr)
+    # `sql_expr`, not `expr`: a structurally-declared metric puts its columns in
+    # `value`, and every guarantee below must cover both forms or the structured
+    # form is an unchecked hole. Validating the RENDERED aggregate rather than
+    # `value` alone also means the `distinct` keyword `count_distinct` introduces
+    # is checked as the SQL keyword it is, by the same keyword list, instead of
+    # needing a second code path.
+    masked = NUMBER.sub(" ", metric.sql_expr)
 
     for match in METRIC_COLUMN_TOKEN.finditer(masked):
         table, column = match.group(1), match.group(2)

@@ -525,12 +525,17 @@ def _metric_expr(metric: Metric) -> ColumnElement[Any]:
     under an alias is therefore not expressible, which is correct — its rows
     would be a different row set than the name suggests.
 
+    `sql_expr` rather than `expr`: a metric may be declared structurally
+    (`agg` + `value`), and this function is deliberately indifferent to which.
+    The loader validates the tokens of whichever form was declared, so the
+    guarantee above is unchanged either way.
+
     `literal_column` rather than `text`: the two render the string identically,
     but a `TextClause` cannot be labelled (`text(...).label(...)` raises
     NotImplementedError on SQLAlchemy 2.0.52) and every use below needs a label
     — to read the value back by name, and to join the subquery's copy of it.
     """
-    return literal_column(metric.expr)
+    return literal_column(metric.sql_expr)
 
 
 def _metric_column(metric: Metric) -> ColumnElement[Any]:
