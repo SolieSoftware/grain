@@ -12,6 +12,23 @@ ValueType = Literal["string", "integer", "decimal", "boolean", "date", "datetime
 
 FANNING: frozenset[str] = frozenset({"one_to_many", "many_to_many"})
 
+AggFunc = Literal["sum", "count", "count_distinct", "min", "max", "avg"]
+
+FANOUT_IMMUNE: frozenset[str] = frozenset({"min", "max", "count_distinct"})
+"""Aggregates that row replication cannot change.
+
+`min`/`max` of a multiset are unaffected by duplicates, and `count(distinct x)`
+dedupes by construction. A fanning join downstream of such a metric's grain
+therefore needs no rewrite at all -- the naive inline aggregate is already the
+right number. The planner never knew this because it read path cardinality and
+never looked at the metric, so chinook's three `count(distinct pk)` metrics were
+pre-aggregated for nothing.
+
+This is about the AGGREGATE only. It says nothing about whether the groups
+overlap, which is a property of the path and is decided separately -- an immune
+metric grouped across a many_to_many is still non-additive.
+"""
+
 
 class ColumnRef(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -186,12 +203,67 @@ class LinkType(BaseModel):
 
 
 class Metric(BaseModel):
+    """An aggregate, declared either opaquely or structurally.
+
+    `expr` is the original form: one SQL string, rendered verbatim, opaque to
+    the engine. `agg` + `value` is the structured form, which splits the
+    aggregate function from the per-row expression it wraps.
+
+    The split is not cosmetic. Two things need the pieces separately: the
+    fan-out taxonomy needs the FUNCTION, to know whether replication can change
+    the answer, and the symmetric engine needs the VALUE, so it can wrap it in
+    an encoded aggregate. Neither is recoverable from `expr` without parsing
+    SQL, which would make a wrong answer depend on the quality of a regex.
+
+    Exactly one form, enforced rather than defaulted. A metric with both would
+    have two renderings and no rule saying which wins; a metric with neither
+    would compile to `literal_column(None)` deep inside the compiler instead of
+    failing at the door.
+    """
+
     name: str
     grain: str
-    expr: str
     type: ValueType
+    expr: str | None = None
+    agg: AggFunc | None = None
+    value: str | None = None
     description: str | None = None
     ai_context: AiContext | None = None
+
+    @model_validator(mode="after")
+    def _check_exactly_one_form(self) -> "Metric":
+        structured = self.agg is not None and self.value is not None
+        partial = (self.agg is None) != (self.value is None)
+        if partial or (structured == (self.expr is not None)):
+            raise ValueError(
+                f"metric '{self.name}' must declare exactly one of 'expr' or "
+                f"'agg' + 'value' (both of that pair, together)"
+            )
+        return self
+
+    @property
+    def is_structured(self) -> bool:
+        return self.agg is not None
+
+    @property
+    def sql_expr(self) -> str:
+        """The aggregate as SQL. One accessor, so the compiler never branches on
+        which form was declared."""
+        if self.expr is not None:
+            return self.expr
+        if self.agg == "count_distinct":
+            return f"count(distinct {self.value})"
+        return f"{self.agg}({self.value})"
+
+    @property
+    def fanout_immune(self) -> bool:
+        """True when row replication cannot change this metric's value.
+
+        An opaque `expr` is never immune. It may well BE a `min` or a
+        `count(distinct ...)`, but nothing here can prove that, and guessing
+        would trade a needless subquery for a possible wrong number.
+        """
+        return self.agg in FANOUT_IMMUNE
 
 
 class Ontology(BaseModel):

@@ -1,0 +1,1528 @@
+<title>Names to SQL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=Archivo:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  :root {
+    --ground: #F5F8F8;
+    --surface: #FFFFFF;
+    --surface-2: #EDF2F2;
+    --ink: #0F1B1E;
+    --ink-soft: #4B5D62;
+    --ink-faint: #78898E;
+    --rule: #D8E2E3;
+    --rule-strong: #B9C8CA;
+    --accent: #0B6F77;
+    --accent-soft: #E0F0F1;
+    --inline: #1C6B44;
+    --inline-bg: #E3F1E9;
+    --rewrite: #8A5406;
+    --rewrite-bg: #F8ECD9;
+    --refuse: #A02A21;
+    --refuse-bg: #F9E4E1;
+    --code-bg: #10201F;
+    --code-ink: #D6E4E2;
+    --shadow: 0 1px 2px rgba(15, 27, 30, .05), 0 8px 24px -16px rgba(15, 27, 30, .25);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0D1315;
+      --surface: #141C1E;
+      --surface-2: #1B2528;
+      --ink: #E3EBEC;
+      --ink-soft: #9AACB0;
+      --ink-faint: #74868B;
+      --rule: #253134;
+      --rule-strong: #34454A;
+      --accent: #48B7BE;
+      --accent-soft: #122E31;
+      --inline: #6BC894;
+      --inline-bg: #12281D;
+      --rewrite: #E0A550;
+      --rewrite-bg: #2C2013;
+      --refuse: #F08D82;
+      --refuse-bg: #2E1815;
+      --code-bg: #0A1112;
+      --code-ink: #C9DAD8;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0D1315;
+    --surface: #141C1E;
+    --surface-2: #1B2528;
+    --ink: #E3EBEC;
+    --ink-soft: #9AACB0;
+    --ink-faint: #74868B;
+    --rule: #253134;
+    --rule-strong: #34454A;
+    --accent: #48B7BE;
+    --accent-soft: #122E31;
+    --inline: #6BC894;
+    --inline-bg: #12281D;
+    --rewrite: #E0A550;
+    --rewrite-bg: #2C2013;
+    --refuse: #F08D82;
+    --refuse-bg: #2E1815;
+    --code-bg: #0A1112;
+    --code-ink: #C9DAD8;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+    font-size: 16.5px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 clamp(1rem, 4vw, 3rem) 6rem;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 61rem; margin: 0 auto; }
+  .col { max-width: 37rem; }
+
+  /* ---------- masthead ---------- */
+
+  header.masthead {
+    padding: clamp(3rem, 8vw, 6rem) 0 2.5rem;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 3rem;
+  }
+
+  .eyebrow {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .7rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 1.25rem;
+  }
+
+  h1 {
+    font-family: Spectral, Georgia, serif;
+    font-weight: 700;
+    font-size: clamp(2.5rem, 6vw, 4rem);
+    line-height: 1.02;
+    letter-spacing: -.02em;
+    margin: 0 0 1.25rem;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    font-family: Spectral, Georgia, serif;
+    font-size: clamp(1.1rem, 2vw, 1.3rem);
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-width: 34rem;
+    margin: 0;
+  }
+
+  .provenance {
+    margin-top: 2.5rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.75rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    color: var(--ink-faint);
+  }
+  .provenance b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- structure ---------- */
+
+  section { margin: 0 0 4.5rem; }
+
+  .stage-label {
+    display: flex;
+    align-items: baseline;
+    gap: .85rem;
+    margin: 0 0 1.5rem;
+    padding-bottom: .6rem;
+    border-bottom: 2px solid var(--ink);
+  }
+  .stage-num {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .78rem;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: .06em;
+  }
+  h2 {
+    font-family: Spectral, Georgia, serif;
+    font-weight: 600;
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    line-height: 1.15;
+    letter-spacing: -.015em;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-family: Spectral, Georgia, serif;
+    font-weight: 600;
+    font-size: 1.2rem;
+    line-height: 1.25;
+    margin: 2.75rem 0 .75rem;
+    text-wrap: balance;
+  }
+  h4 {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .74rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    margin: 2rem 0 .6rem;
+  }
+
+  p { margin: 0 0 1.1rem; }
+  .col p, .col ul, .col ol { max-width: 37rem; }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  code {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .855em;
+    background: var(--surface-2);
+    padding: .1em .32em;
+    border-radius: 3px;
+  }
+
+  strong { font-weight: 600; }
+
+  ul, ol { padding-left: 1.35rem; margin: 0 0 1.1rem; }
+  li { margin-bottom: .5rem; }
+
+  /* ---------- panels ---------- */
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    box-shadow: var(--shadow);
+    margin: 1.75rem 0;
+    overflow: hidden;
+  }
+  .panel-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: .7rem 1rem;
+    border-bottom: 1px solid var(--rule);
+    background: var(--surface-2);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .panel-head b { color: var(--ink); font-weight: 500; text-transform: none; letter-spacing: 0; }
+  .panel-body { padding: 1rem; }
+
+  pre {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .78rem;
+    line-height: 1.62;
+    margin: 0;
+    padding: 1rem;
+    background: var(--code-bg);
+    color: var(--code-ink);
+    overflow-x: auto;
+    tab-size: 2;
+  }
+  pre.plain {
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+  }
+  pre b { color: #7FD8DE; font-weight: 500; }
+  pre i { color: #E7B96A; font-style: normal; }
+  pre u { color: #8FD9AC; text-decoration: none; }
+  pre s { color: #F0968C; text-decoration: none; }
+  pre .dim { color: #6B8285; }
+
+  /* ---------- tables ---------- */
+
+  .scroll { overflow-x: auto; }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: .82rem;
+    font-variant-numeric: tabular-nums;
+  }
+  th, td {
+    text-align: left;
+    padding: .5rem .7rem;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  th {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+    font-weight: 500;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--rule-strong);
+  }
+  td code { background: none; padding: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+
+  /* ---------- verdict chips ---------- */
+
+  .chip {
+    display: inline-block;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    font-weight: 500;
+    letter-spacing: .04em;
+    padding: .12em .5em;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .chip.inline { color: var(--inline); background: var(--inline-bg); }
+  .chip.rewrite { color: var(--rewrite); background: var(--rewrite-bg); }
+  .chip.refuse { color: var(--refuse); background: var(--refuse-bg); }
+  .chip.neutral { color: var(--ink-soft); background: var(--surface-2); }
+
+  /* ---------- figures ---------- */
+
+  figure { margin: 2.25rem 0; }
+  figure svg { max-width: 100%; height: auto; display: block; color: var(--ink); }
+  figcaption {
+    font-size: .82rem;
+    color: var(--ink-soft);
+    margin-top: .85rem;
+    max-width: 40rem;
+    line-height: 1.5;
+  }
+  .fig-frame {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 1.5rem 1.25rem;
+    overflow-x: auto;
+  }
+
+  /* ---------- callouts ---------- */
+
+  .note {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-soft);
+    padding: .9rem 1.1rem;
+    margin: 1.75rem 0;
+    border-radius: 0 4px 4px 0;
+    font-size: .93rem;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note .tag {
+    display: block;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: .35rem;
+  }
+
+  .defect {
+    border-left: 3px solid var(--refuse);
+    background: var(--refuse-bg);
+  }
+  .defect .tag { color: var(--refuse); }
+
+  /* ---------- two-up ---------- */
+
+  .two-up {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+    gap: 1.25rem;
+    margin: 1.75rem 0;
+  }
+
+  details {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--surface);
+    padding: .7rem 1rem;
+    margin: 1.25rem 0;
+  }
+  summary {
+    cursor: pointer;
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: .74rem;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  details[open] summary { margin-bottom: .85rem; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 2rem;
+    color: var(--ink-faint);
+    font-size: .85rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">grain · engine internals</p>
+  <h1>Names to SQL</h1>
+  <p class="standfirst">
+    Two modules stand between a typed request and a statement the database will run.
+    <code>resolve.py</code> turns names into structure. <code>compile.py</code> turns
+    structure into SQL. Neither one is allowed to do the other's job — and that
+    separation is what makes the answer checkable.
+  </p>
+  <div class="provenance">
+    <span><b>Traced live</b> · chinook v1.4.5, PostgreSQL 17</span>
+    <span><b>8 specs</b> executed through the real pipeline</span>
+    <span><b>241 tests</b> passing at time of writing</span>
+  </div>
+</header>
+
+<section class="col">
+  <p>
+    Every value on this page was read off the objects the real functions produced —
+    <code>resolve()</code>, <code>analyse()</code>, <code>compile_query()</code> — with
+    <code>Scope.register</code> and <code>Scope.column</code> instrumented to record the
+    order they were actually called in. No example here was written by hand.
+  </p>
+</section>
+
+<!-- ============================================================ -->
+<section>
+  <div class="stage-label">
+    <span class="stage-num">00</span>
+    <h2>The problem both modules exist to solve</h2>
+  </div>
+
+  <div class="col">
+    <p>
+      A metric means something only at the grain of the table it aggregates. Join that
+      table to anything with higher cardinality and its rows are <em>replicated</em> —
+      so the sum counts the same money more than once.
+    </p>
+  </div>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 720 290" role="img" aria-label="Robert Brown's two invoices, 48 and 169, joined to three invoice lines: invoice 169 has two lines so its total is counted twice, taking 2.97 to 4.95.">
+        <defs>
+          <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- column headers -->
+        <text x="24" y="26" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">customer</text>
+        <text x="244" y="26" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">invoice</text>
+        <text x="474" y="26" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">invoice_line</text>
+
+        <!-- customer -->
+        <rect x="24" y="108" width="132" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="38" y="129" font-size="12" font-family="monospace" fill="currentColor">29 R. Brown</text>
+        <text x="38" y="144" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".6">1 row</text>
+
+        <!-- invoices -->
+        <rect x="244" y="62" width="150" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="257" y="83" font-size="12" font-family="monospace" fill="currentColor">inv 48</text>
+        <text x="257" y="98" font-size="11" font-family="monospace" fill="currentColor" opacity=".75">total 0.99</text>
+        <rect x="244" y="150" width="150" height="44" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="257" y="171" font-size="12" font-family="monospace" fill="currentColor">inv 169</text>
+        <text x="257" y="186" font-size="11" font-family="monospace" fill="currentColor" opacity=".75">total 1.98</text>
+
+        <!-- lines -->
+        <rect x="474" y="68" width="126" height="32" rx="3" fill="none" stroke="currentColor" stroke-width="1" opacity=".75"/>
+        <text x="486" y="89" font-size="11" font-family="monospace" fill="currentColor" opacity=".85">line 0.99</text>
+        <rect x="474" y="140" width="126" height="32" rx="3" fill="none" stroke="currentColor" stroke-width="1" opacity=".75"/>
+        <text x="486" y="161" font-size="11" font-family="monospace" fill="currentColor" opacity=".85">line 0.99</text>
+        <rect x="474" y="180" width="126" height="32" rx="3" fill="none" stroke="currentColor" stroke-width="1" opacity=".75"/>
+        <text x="486" y="201" font-size="11" font-family="monospace" fill="currentColor" opacity=".85">line 0.99</text>
+
+        <!-- edges -->
+        <line x1="156" y1="122" x2="242" y2="88" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+        <line x1="156" y1="138" x2="242" y2="170" stroke="currentColor" stroke-width="1.2" marker-end="url(#a1)"/>
+        <line x1="394" y1="84" x2="472" y2="84" stroke="currentColor" stroke-width="1" marker-end="url(#a1)" opacity=".7"/>
+        <line x1="394" y1="166" x2="472" y2="156" stroke="currentColor" stroke-width="1" marker-end="url(#a1)" opacity=".7"/>
+        <line x1="394" y1="176" x2="472" y2="196" stroke="currentColor" stroke-width="1" marker-end="url(#a1)" opacity=".7"/>
+
+        <text x="180" y="106" font-size="10" font-family="monospace" fill="currentColor" opacity=".65">one_to_many</text>
+        <text x="404" y="126" font-size="10" font-family="monospace" fill="currentColor" opacity=".65">one_to_many</text>
+        <text x="404" y="222" font-size="10" font-family="monospace" fill="currentColor" opacity=".8">2 lines — so 1.98 lands twice</text>
+
+        <!-- the count -->
+        <line x1="24" y1="248" x2="700" y2="248" stroke="currentColor" stroke-width="1" opacity=".25"/>
+        <text x="24" y="270" font-size="11.5" font-family="monospace" fill="currentColor">
+          <tspan opacity=".6">sum(invoice.total) at invoice grain =</tspan>
+          <tspan font-weight="700"> 2.97</tspan>
+          <tspan opacity=".6">   ·   joined through invoice_line =</tspan>
+          <tspan font-weight="700" fill="#C0392B"> 4.95</tspan>
+        </text>
+      </svg>
+    </div>
+    <figcaption>
+      Two real invoices belonging to customer 29. After the join each invoice header
+      appears once per line it owns, so invoice 169's total is counted twice and 2.97
+      becomes 4.95 — both measured. Across the whole database the same mechanism is the
+      difference between <strong>2328.60</strong> and <strong>20848.62</strong>: 8.95×
+      overstated, right magnitude, right sign, right type, and no error anywhere.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <p>
+      Grain is not in the schema. A foreign key records <em>that</em> two tables relate,
+      never <em>what one row means</em>. So the ontology holds that one fact, and these
+      two modules are what turn it into a statement.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section>
+  <div class="stage-label">
+    <span class="stage-num">01</span>
+    <h2>Five stages, and what crosses each boundary</h2>
+  </div>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 760 210" role="img" aria-label="The five pipeline stages — resolve, analyse, compile, guard, execute — and the typed value that crosses each boundary between them.">
+        <defs>
+          <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <text x="12" y="30" font-size="11" font-family="monospace" fill="currentColor" opacity=".55">QuerySpec</text>
+        <line x1="12" y1="40" x2="12" y2="96" stroke="currentColor" stroke-width="1" opacity=".4"/>
+        <line x1="12" y1="96" x2="52" y2="96" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+
+        <!-- stage boxes -->
+        <g>
+          <rect x="56" y="72" width="118" height="48" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+          <text x="70" y="94" font-size="12.5" font-family="monospace" fill="currentColor" font-weight="700">resolve</text>
+          <text x="70" y="110" font-size="10" font-family="monospace" fill="currentColor" opacity=".6">names → structure</text>
+        </g>
+        <g>
+          <rect x="216" y="72" width="118" height="48" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+          <text x="230" y="94" font-size="12.5" font-family="monospace" fill="currentColor" font-weight="700">analyse</text>
+          <text x="230" y="110" font-size="10" font-family="monospace" fill="currentColor" opacity=".6">the verdicts</text>
+        </g>
+        <g>
+          <rect x="376" y="72" width="118" height="48" rx="3" fill="none" stroke="currentColor" stroke-width="2"/>
+          <text x="390" y="94" font-size="12.5" font-family="monospace" fill="currentColor" font-weight="700">compile</text>
+          <text x="390" y="110" font-size="10" font-family="monospace" fill="currentColor" opacity=".6">structure → SQL</text>
+        </g>
+        <g opacity=".55">
+          <rect x="536" y="72" width="88" height="48" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="550" y="94" font-size="12.5" font-family="monospace" fill="currentColor">guard</text>
+          <text x="550" y="110" font-size="10" font-family="monospace" fill="currentColor" opacity=".7">timeout, cap</text>
+        </g>
+        <g opacity=".55">
+          <rect x="650" y="72" width="88" height="48" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <text x="664" y="94" font-size="12.5" font-family="monospace" fill="currentColor">execute</text>
+          <text x="664" y="110" font-size="10" font-family="monospace" fill="currentColor" opacity=".7">rows</text>
+        </g>
+
+        <!-- connectors + payloads -->
+        <line x1="176" y1="96" x2="212" y2="96" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+        <text x="194" y="60" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".75">Resolved</text>
+        <text x="194" y="48" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".75">Query</text>
+
+        <line x1="336" y1="96" x2="372" y2="96" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+        <text x="354" y="60" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".75">Grain</text>
+        <text x="354" y="48" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".75">Plan</text>
+
+        <line x1="496" y1="96" x2="532" y2="96" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)"/>
+        <text x="514" y="54" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".75">Select</text>
+
+        <line x1="626" y1="96" x2="646" y2="96" stroke="currentColor" stroke-width="1.2" marker-end="url(#a2)" opacity=".6"/>
+
+        <!-- data access line -->
+        <line x1="56" y1="152" x2="494" y2="152" stroke="currentColor" stroke-width="1" stroke-dasharray="3 3" opacity=".5"/>
+        <text x="60" y="170" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".65">no database access — every verdict is decided from the ontology alone</text>
+        <line x1="536" y1="152" x2="738" y2="152" stroke="currentColor" stroke-width="1" opacity=".5"/>
+        <text x="540" y="170" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".65">first and only round trip</text>
+      </svg>
+    </div>
+    <figcaption>
+      The pipeline is five stages because the separation earns its keep in error
+      attribution: a failure names the stage that produced it. Nothing left of
+      <code>guard</code> touches data, which is why a verdict cannot drift as rows are
+      added.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <p>
+      <code>resolve.py</code> is the widest gate and the cheapest failure. Everything it
+      rejects is decidable from the ontology, so a typo costs a validation error rather
+      than a query. <code>compile.py</code> is the opposite: by the time control reaches
+      it, every judgement has already been made, and its job is to emit exactly what was
+      decided.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section>
+  <div class="stage-label">
+    <span class="stage-num">02</span>
+    <h2>resolve.py — names into structure</h2>
+  </div>
+
+  <div class="col">
+    <p>
+      The input is a <code>QuerySpec</code> whose every string must name something the
+      ontology declares. The output is a <code>ResolvedQuery</code>: the same request with
+      every name replaced by the thing it names, and a walked path of edges.
+    </p>
+    <p>
+      Take the flagship spec. Here is what went in, and what came out —
+      traced, not illustrated:
+    </p>
+  </div>
+
+  <div class="two-up">
+    <div class="panel">
+      <div class="panel-head"><span>input</span><b>QuerySpec</b></div>
+      <pre><b>object</b>:    "Customer"
+<b>group_by</b>:  ["country"]
+<b>metrics</b>:   ["revenue"]
+<b>traverse</b>:  [Hop("Customer_Invoices"),
+             Hop("Invoice_Lines")]
+<b>filters</b>:   []
+<b>order_by</b>:  []
+<b>limit</b>:     None</pre>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span>output</span><b>ResolvedQuery</b></div>
+      <pre><b>root</b>: Customer <span class="dim">(primary: customer)</span>
+<b>path</b>:
+  <u>Customer_Invoices</u> direct
+    Customer → Invoice
+    one_to_many · <i>fans_out</i>
+    customer.customer_id
+      = invoice.customer_id
+  <u>Invoice_Lines</u> direct
+    Invoice → InvoiceLine
+    one_to_many · <i>fans_out</i>
+    invoice.invoice_id
+      = invoice_line.invoice_id
+<b>group_by</b>: country
+  <span class="dim">→ customer.country</span>
+  <span class="dim">edge_index=None  unique=False</span>
+  <span class="dim">nullable=True</span>
+<b>metrics</b>: revenue @ invoice_line
+  <span class="dim">sum(invoice_line.unit_price</span>
+  <span class="dim">    * invoice_line.quantity)</span>
+<b>tables_in_scope</b>:
+  customer, invoice, invoice_line</pre>
+    </div>
+  </div>
+
+  <div class="col">
+    <p>
+      Notice what the resolver added that the spec did not carry: the cardinality of each
+      hop, the physical column behind <code>country</code>, its nullability, whether it is
+      declared unique, and the grain of the metric. Those five facts are what every later
+      decision is made from.
+    </p>
+
+    <h3>The traverse walk is a chain, not a graph</h3>
+    <p>
+      <code>resolve</code> keeps a <code>current</code> object and requires each hop to
+      start where the last one ended:
+    </p>
+  </div>
+
+  <pre class="plain">current = root
+for hop in spec.traverse:
+    link = onto.links[hop.link]              <span style="opacity:.6"># else UnknownName</span>
+    if link.from_ != current.name:            <span style="opacity:.6"># else NoPath</span>
+        raise NoPath(current.name, link.to, links_from(current.name))
+    if hop.max_depth is not None:
+        link = link.model_copy(update={"max_depth": hop.max_depth})
+    path.append(Edge(link=link, from_object=current, to_object=target))
+    current = target</pre>
+
+  <div class="col">
+    <p>
+      Three things are doing real work here. <strong>The chain rule</strong> makes a
+      branching path unrepresentable — you cannot go out to invoices and back to a
+      customer's support rep in one spec — which is precisely why the engine needs no
+      "chasm trap" detection. <strong>The <code>model_copy</code></strong> gives the hop a
+      private copy of the link with its own <code>max_depth</code>, so overriding depth on
+      one hop cannot mutate the shared ontology. And <strong>the <code>Edge</code>
+      triple</strong> records <em>from</em> and <em>to</em> alongside the link, so later
+      stages never have to re-derive which object a hop departed from.
+    </p>
+
+    <h3>Two kinds of dotted name, which mean different things</h3>
+    <p>
+      A dot appears in two places in a spec, and it means something different in each.
+      This is the single most confusable thing in the module, so both readings are
+      published to the agent as rules in <code>describe()</code>.
+    </p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th></th><th>In <code>filters</code></th><th>In <code>group_by</code></th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>Written</b></td>
+          <td><code>Customer_Invoices.total</code></td>
+          <td><code>Employee_Manager.last_name</code></td>
+        </tr>
+        <tr>
+          <td><b>Means</b></td>
+          <td>Which root objects the query is <em>about</em></td>
+          <td>A column of the object that hop <em>lands on</em></td>
+        </tr>
+        <tr>
+          <td><b>Needs the hop traversed?</b></td>
+          <td>No — it names a link, not a path</td>
+          <td>Yes — the column must be in FROM to be grouped by</td>
+        </tr>
+        <tr>
+          <td><b>Depth</b></td>
+          <td>Exactly one hop, even on a recursive link</td>
+          <td>Whatever the hop walks (a recursive hop walks the chain)</td>
+        </tr>
+        <tr>
+          <td><b>Compiles to</b></td>
+          <td><code>EXISTS (…)</code> — changes the population</td>
+          <td>A selected, grouped column</td>
+        </tr>
+        <tr>
+          <td><b>Resolver field</b></td>
+          <td><code>ResolvedFilter.hops</code></td>
+          <td><code>ResolvedProperty.edge_index</code></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="tag">the consequence, measured</span>
+    <p>
+      "invoice_total where the invoice is over 10" reads as a row filter and is not one.
+      The population reading returns <strong>2328.60 over 412 invoices</strong>; the row
+      reading would return <strong>942.32 over 64</strong>. Same spec, and the difference
+      is a factor of 2.5 — which is why the rule is published rather than left to be
+      inferred.
+    </p>
+  </div>
+
+  <div class="col">
+    <h3>edge_index: the field that makes a column mean one row</h3>
+    <p>
+      A qualified group key resolves to a <code>ResolvedProperty</code> carrying
+      <code>edge_index</code> — the <em>position on the path</em> at which the column is
+      read. This exists because a column reference alone is ambiguous:
+      <code>employee.last_name</code> is one column, but a query that walks
+      <code>Employee_Manager</code> has <code>employee</code> in scope twice, as the
+      employee and as the ancestor. Same column, two different rows.
+    </p>
+    <p>
+      Traced, from the recursive spec:
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span>traced</span><b>resolve → group_by</b></div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>key</th><th>object</th><th>column</th><th>edge_index</th><th>qualified</th><th>unique</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>Employee_Manager.id</code></td><td>Employee</td><td><code>employee.employee_id</code></td><td>0</td><td>true</td><td><span class="chip inline">true</span></td></tr>
+          <tr><td><code>Employee_Manager.last_name</code></td><td>Employee</td><td><code>employee.last_name</code></td><td>0</td><td>true</td><td><span class="chip neutral">false</span></td></tr>
+          <tr><td><code>country</code> <span style="opacity:.6">(spec A)</span></td><td>Customer</td><td><code>customer.country</code></td><td><code>None</code></td><td>false</td><td><span class="chip neutral">false</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col">
+    <p>
+      <code>name</code> keeps the <em>full</em> dotted key, because that is the label the
+      caller gets back. A qualified key labelled with its bare property name would be
+      indistinguishable in the result from the root's own property of the same name —
+      exactly the ambiguity qualification exists to remove.
+    </p>
+    <p>
+      A qualified key names a <strong>link</strong>, not a hop. So walking the same link
+      twice makes the key unanswerable, and the resolver says so rather than guessing:
+    </p>
+  </div>
+
+  <pre class="plain"><s>AmbiguousGroupKey</s>: Group key 'Employee_Manager.last_name' names 'Employee_Manager',
+which this query traverses 2 times (hops 1, 2). A qualified key names a link,
+not a hop, so it cannot say which one is meant.</pre>
+
+  <div class="col">
+    <h3>Everything the resolver refuses</h3>
+    <p>
+      All of it decidable from the ontology, all of it naming a next move. The messages
+      below are verbatim from the traced run.
+    </p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Error</th><th>Raised when</th><th>What it names</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>UnknownName</code></td>
+          <td>An object, link, property, metric or order_by key the ontology does not declare</td>
+          <td>Up to 3 close matches by edit distance — <code>"Unknown property of Customer 'contry'. Did you mean: country, city?"</code></td>
+        </tr>
+        <tr>
+          <td><code>NoPath</code></td>
+          <td>A hop whose <code>from</code> is not where the walk currently stands</td>
+          <td>Every link that <em>does</em> leave the current object</td>
+        </tr>
+        <tr>
+          <td><code>GroupKeyNotOnPath</code></td>
+          <td>A qualified key naming a link that is not traversed</td>
+          <td><code>"add the Employee_Manager hop to traverse"</code></td>
+        </tr>
+        <tr>
+          <td><code>AmbiguousGroupKey</code></td>
+          <td>A qualified key naming a link traversed more than once</td>
+          <td>The hop numbers it could have meant</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <h3>Two quiet correctness details</h3>
+    <p>
+      <strong>Duplicates are collapsed, not rejected.</strong>
+      <code>group_by=["country","country"]</code> means what asking once means, and a
+      caller assembling a spec programmatically does it often. Left in, it becomes two
+      identically-labelled SELECT columns and two identically-aliased subqueries, which
+      SQLAlchemy rejects mid-compile — a crash on a request whose meaning was never in
+      doubt. <code>_unique()</code> keeps the first occurrence, so the caller's own column
+      order survives.
+    </p>
+    <p>
+      <strong><code>order_by</code> is validated against what the query emits.</strong>
+      A key that names neither a group key nor a requested metric could never be
+      honoured, so it is a typed error at the door. This one is recent: the field was
+      accepted and never read for the whole build, and with <code>limit</code> defaulting
+      to 100, "top 10 countries by revenue" returned ten arbitrary countries — omitting
+      USA, the largest at 523.06 — correctly computed, with nothing to say the result was
+      partial.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section>
+  <div class="stage-label">
+    <span class="stage-num">03</span>
+    <h2>The verdicts, in between</h2>
+  </div>
+
+  <div class="col">
+    <p>
+      <code>compile.py</code> cannot be read without this stage, because it consumes its
+      output. <code>analyse()</code> asks one question per metric: <em>where does this
+      metric's grain enter scope, and what happens to its rows after that?</em>
+    </p>
+  </div>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 700 250" role="img" aria-label="The path split into a prefix reaching the metric's grain and the downstream edges after it; a fanning downstream edge is what forces the aggregate-then-join rewrite.">
+        <defs>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- spine -->
+        <circle cx="60" cy="70" r="5" fill="currentColor"/>
+        <text x="46" y="52" font-size="11" font-family="monospace" fill="currentColor">root</text>
+        <line x1="66" y1="70" x2="224" y2="70" stroke="currentColor" stroke-width="1.4" marker-end="url(#a3)"/>
+        <circle cx="230" cy="70" r="5" fill="currentColor"/>
+        <line x1="236" y1="70" x2="394" y2="70" stroke="currentColor" stroke-width="1.4" marker-end="url(#a3)"/>
+        <circle cx="400" cy="70" r="5" fill="currentColor"/>
+        <line x1="406" y1="70" x2="564" y2="70" stroke="currentColor" stroke-width="1.4" marker-end="url(#a3)"/>
+        <circle cx="570" cy="70" r="5" fill="currentColor"/>
+
+        <text x="98" y="62" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".7">hop 1</text>
+        <text x="268" y="62" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".7">hop 2</text>
+        <text x="438" y="62" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".7">hop 3</text>
+
+        <!-- grain marker -->
+        <line x1="400" y1="46" x2="400" y2="96" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"/>
+        <text x="400" y="38" font-size="11" font-family="monospace" fill="currentColor" text-anchor="middle" font-weight="700">grain enters here</text>
+
+        <!-- brackets -->
+        <path d="M 60 118 L 60 128 L 400 128 L 400 118" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".8"/>
+        <text x="230" y="148" font-size="11.5" font-family="monospace" fill="currentColor" text-anchor="middle">prefix</text>
+        <text x="230" y="164" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".65">replicates the grain's ancestors</text>
+        <text x="230" y="178" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".65">— harmless to this metric</text>
+
+        <path d="M 400 118 L 400 128 L 570 128 L 570 118" fill="none" stroke="currentColor" stroke-width="1.8"/>
+        <text x="485" y="148" font-size="11.5" font-family="monospace" fill="currentColor" text-anchor="middle" font-weight="700">downstream</text>
+        <text x="485" y="164" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".65">replicates the grain's</text>
+        <text x="485" y="178" font-size="10" font-family="monospace" fill="currentColor" text-anchor="middle" opacity=".65">OWN rows</text>
+
+        <!-- verdicts -->
+        <line x1="20" y1="204" x2="680" y2="204" stroke="currentColor" stroke-width="1" opacity=".25"/>
+        <text x="20" y="226" font-size="11" font-family="monospace" fill="currentColor" opacity=".75">no fanning edge downstream</text>
+        <text x="300" y="226" font-size="11" font-family="monospace" fill="currentColor" font-weight="700">→ inline</text>
+        <text x="20" y="242" font-size="11" font-family="monospace" fill="currentColor" opacity=".75">a fanning edge downstream, unpinned</text>
+        <text x="300" y="242" font-size="11" font-family="monospace" fill="currentColor" font-weight="700">→ aggregate-then-join</text>
+      </svg>
+    </div>
+    <figcaption>
+      Only edges traversed <em>after</em> the grain enters scope replicate the metric's own
+      rows. Edges before it replicate the grain's ancestors, which leaves this metric
+      intact — so the rule looks downstream, not at the path as a whole.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <p>
+      Three specs, same database, three different verdicts. All traced:
+    </p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Spec</th><th>Metric @ grain</th><th>Prefix</th><th>Downstream</th><th>Verdict</th><th>subquery_edges</th><th>additive</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>A</b> revenue by country</td>
+          <td><code>revenue @ invoice_line</code></td>
+          <td>both hops</td>
+          <td>—</td>
+          <td><span class="chip inline">inline</span></td>
+          <td>2</td>
+          <td>true</td>
+        </tr>
+        <tr>
+          <td><b>B</b> invoice_total by country</td>
+          <td><code>invoice_total @ invoice</code></td>
+          <td>Customer_Invoices</td>
+          <td>Invoice_Lines</td>
+          <td><span class="chip rewrite">aggregate-then-join</span></td>
+          <td>1</td>
+          <td>true</td>
+        </tr>
+        <tr>
+          <td><b>D</b> headcount by ancestor</td>
+          <td><code>employee_count @ employee</code></td>
+          <td>— (root grain)</td>
+          <td>Employee_Manager</td>
+          <td><span class="chip inline">inline</span></td>
+          <td>1</td>
+          <td><span class="chip rewrite">false</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      A and B are the same path and differ only in which metric was asked for. D is the
+      interesting one: it has a fanning edge downstream of its grain, which by the rule
+      above should force a rewrite — yet it came back <code>inline</code>.
+    </p>
+    <p>
+      The reason is the one refinement to the core rule. A fanning edge replicates the
+      metric's rows, and the rewrite exists to stop those copies being summed together.
+      But the group key <code>Employee_Manager.id</code> pins <em>one employee</em> at that
+      hop, so each copy lands in a different ancestor's group and appears exactly once
+      inside it. Correct per group, meaningless as a total — hence
+      <code>additive: false</code>. It is the mirror image of "revenue by playlist", which
+      the engine already answered that way.
+    </p>
+  </div>
+
+  <div class="note defect">
+    <span class="tag">deliberately narrow</span>
+    <p>
+      The pinning key must sit at the fanning edge's <em>own</em> position. A key further
+      along determines the row at that edge only when every edge in between is functional
+      in reverse. The counterexample:
+      <code>Playlist → Playlist_Tracks (m2m) → Track_Album (m2o)</code> grouped by a
+      unique album key — one album does not determine which track, so a playlist holding
+      two tracks from one album appears twice inside that album's group. The wider rule is
+      a non-goal until something measures that it is needed.
+    </p>
+  </div>
+
+  <div class="col">
+    <p>
+      When neither applies, the query is refused with the alternatives named. Verbatim
+      from the trace, for a spec identical to D except that it groups by the ancestor's
+      <em>name</em>:
+    </p>
+  </div>
+
+  <pre class="plain"><s>KeyBeyondGrain</s>: Metric 'employee_count' is at 'employee' grain and must be
+pre-aggregated here, but the group key 'Employee_Manager.last_name' lies beyond
+that grain across 'Employee_Manager', which fans out. Carrying the key into the
+pre-aggregate would replicate the metric's own rows.
+<span style="opacity:.6">Alternatives: drop the 'Employee_Manager.last_name' group key, use a metric whose
+grain reaches 'Employee_Manager.last_name', remove the Employee_Manager hop.</span></pre>
+</section>
+
+<!-- ============================================================ -->
+<section>
+  <div class="stage-label">
+    <span class="stage-num">04</span>
+    <h2>compile.py — structure into SQL</h2>
+  </div>
+
+  <div class="col">
+    <p>
+      One idea runs through the whole module: <strong>a column reference is not enough to
+      say which row is meant.</strong> So every position on the walked path gets its own
+      FROM element, and a property is read off the element for <em>its</em> position.
+      That is what <code>Scope</code> is.
+    </p>
+  </div>
+
+  <h4>Scope, traced from the recursive spec</h4>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 700 260" role="img" aria-label="Scope maps each path position to a FROM element: the root position holds the real employee table, hop 1 holds a recursive CTE, and the same declared column resolves differently at each.">
+        <defs>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <text x="16" y="26" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">POSITION</text>
+        <text x="200" y="26" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">TABLE NAME</text>
+        <text x="380" y="26" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">FROM ELEMENT</text>
+
+        <!-- root row -->
+        <rect x="16" y="42" width="90" height="34" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <text x="32" y="64" font-size="12" font-family="monospace" fill="currentColor">root</text>
+        <text x="200" y="64" font-size="12" font-family="monospace" fill="currentColor">employee</text>
+        <line x1="290" y1="59" x2="374" y2="59" stroke="currentColor" stroke-width="1.2" marker-end="url(#a4)"/>
+        <rect x="380" y="42" width="290" height="34" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <text x="394" y="64" font-size="12" font-family="monospace" fill="currentColor">Table  employee</text>
+
+        <!-- hop row -->
+        <rect x="16" y="104" width="90" height="34" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <text x="32" y="126" font-size="12" font-family="monospace" fill="currentColor">hop 1</text>
+        <text x="200" y="126" font-size="12" font-family="monospace" fill="currentColor">employee</text>
+        <text x="200" y="141" font-size="10" font-family="monospace" fill="currentColor" opacity=".6">same name!</text>
+        <line x1="290" y1="121" x2="374" y2="121" stroke="currentColor" stroke-width="1.2" marker-end="url(#a4)"/>
+        <rect x="380" y="104" width="290" height="34" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/>
+        <text x="394" y="126" font-size="12" font-family="monospace" fill="currentColor">CTE  employee_manager_cte_0</text>
+
+        <!-- resolution -->
+        <line x1="16" y1="172" x2="680" y2="172" stroke="currentColor" stroke-width="1" opacity=".25"/>
+        <text x="16" y="194" font-size="11" font-family="monospace" fill="currentColor" opacity=".6">the SAME declared column, read at each position:</text>
+        <text x="16" y="218" font-size="11.5" font-family="monospace" fill="currentColor">
+          <tspan opacity=".75">employee.last_name @ root  →</tspan>
+          <tspan font-weight="700"> employee.last_name</tspan>
+        </text>
+        <text x="16" y="238" font-size="11.5" font-family="monospace" fill="currentColor">
+          <tspan opacity=".75">employee.last_name @ hop1  →</tspan>
+          <tspan font-weight="700"> employee_manager_cte_0.last_name</tspan>
+        </text>
+      </svg>
+    </div>
+    <figcaption>
+      Both positions hold a table called <code>employee</code>, and they are different
+      rows — the employee and the ancestor. <code>Scope.column()</code> is what turns a
+      declared column plus a position into the one SQL column that means the right row.
+    </figcaption>
+  </figure>
+
+  <div class="col">
+    <p>
+      A table is <strong>aliased only when its name is already in scope</strong>. That
+      restraint is load-bearing twice over: a query that never revisits a table compiles
+      to byte-identical SQL to before <code>Scope</code> existed — which is what the
+      provenance guarantee rests on — and metric expressions are raw SQL naming real
+      tables, so aliasing everything would break them silently.
+    </p>
+  </div>
+
+  <h4>FROM first, columns last</h4>
+
+  <div class="col">
+    <p>
+      <code>compile_query</code> builds in an order that looks odd until you see why: it
+      selects the root's columns as a placeholder, assembles the whole FROM clause, and
+      only then replaces the columns clause with <code>with_only_columns</code>.
+    </p>
+  </div>
+
+  <pre class="plain">scope.register(<b>None</b>, root.primary, root_table)        <span style="opacity:.6"># position "root"</span>
+stmt = select(root_table).select_from(root_table)       <span style="opacity:.6"># placeholder columns</span>
+stmt = _apply_object_joins(stmt, scope, None, rq.root, root_table)
+stmt = _apply_path(stmt, scope, rq)                    <span style="opacity:.6"># every hop, in order</span>
+stmt = _apply_filters(stmt, scope, metadata, rq)
+
+group_cols = [scope.column(rp).label(rp.name) for rp in rq.group_by]   <span style="opacity:.6"># NOW resolvable</span>
+stmt = stmt.with_only_columns(*group_cols, *inline_cols)</pre>
+
+  <div class="col">
+    <p>
+      A qualified group key cannot be resolved until the hop that brings it into scope has
+      been applied. So the FROM clause has to exist before the SELECT list can be written
+      — the reverse of how one reads SQL.
+    </p>
+
+    <h3>Three kinds of edge</h3>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>kind</th><th>What lands in FROM</th><th>Object joins applied against</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>direct</code></td>
+          <td>The target's primary table, joined on the link's own column pairs</td>
+          <td>That table</td>
+        </tr>
+        <tr>
+          <td><code>through</code></td>
+          <td>The junction table, then the target — so the junction never surfaces to the caller</td>
+          <td>The target</td>
+        </tr>
+        <tr>
+          <td><code>recursive</code></td>
+          <td>An ancestor CTE, joined on <code>__grain_start</code></td>
+          <td>The CTE — so an ancestor's spanned tables are the <em>ancestor's</em></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note defect">
+    <span class="tag">an inverted rule</span>
+    <p>
+      A recursive edge used to <em>skip</em> object joins, on the reasoning that "that
+      object's spanned tables are already joined". True while the CTE joined each row to
+      its own hierarchy row — the target <em>was</em> the source row. Now that the target
+      is the ancestor, reusing the employee's <code>department</code> would report it under
+      the manager's name: the same wrong-entity bug, one table further out.
+    </p>
+  </div>
+
+  <h4>The ancestor walk</h4>
+
+  <figure>
+    <div class="fig-frame">
+      <svg viewBox="0 0 700 280" role="img" aria-label="The recursive CTE pairs each starting row with every ancestor above it, carrying the start key, a depth counter and a path array that stops a cycle.">
+        <defs>
+          <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+          </marker>
+        </defs>
+
+        <!-- hierarchy -->
+        <text x="16" y="24" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">THE DATA</text>
+        <rect x="30" y="38" width="86" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text x="42" y="56" font-size="11" font-family="monospace" fill="currentColor">1 Adams</text>
+        <rect x="30" y="94" width="86" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="42" y="112" font-size="11" font-family="monospace" fill="currentColor">2 Edwards</text>
+        <rect x="30" y="150" width="86" height="26" rx="3" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="42" y="168" font-size="11" font-family="monospace" fill="currentColor">3 Peacock</text>
+        <line x1="73" y1="94" x2="73" y2="66" stroke="currentColor" stroke-width="1.2" marker-end="url(#a5)"/>
+        <line x1="73" y1="150" x2="73" y2="122" stroke="currentColor" stroke-width="1.2" marker-end="url(#a5)"/>
+        <text x="124" y="86" font-size="9.5" font-family="monospace" fill="currentColor" opacity=".6">reports_to</text>
+
+        <!-- cte rows -->
+        <text x="250" y="24" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".55">WHAT THE CTE HOLDS</text>
+        <rect x="250" y="38" width="420" height="150" rx="3" fill="none" stroke="currentColor" stroke-width="1" opacity=".5"/>
+        <text x="266" y="60" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".6">__grain_start   ancestor   __grain_depth   __grain_path</text>
+        <line x1="266" y1="68" x2="654" y2="68" stroke="currentColor" stroke-width="1" opacity=".3"/>
+        <text x="266" y="88" font-size="11" font-family="monospace" fill="currentColor">2               1 Adams    1               [1]</text>
+        <text x="266" y="110" font-size="11" font-family="monospace" fill="currentColor">3               2 Edwards  1               [2]</text>
+        <text x="266" y="132" font-size="11" font-family="monospace" fill="currentColor">3               1 Adams    2               [2,1]</text>
+        <text x="266" y="154" font-size="11" font-family="monospace" fill="currentColor" opacity=".55">…one row per (row, ancestor) pair</text>
+        <text x="266" y="176" font-size="10.5" font-family="monospace" fill="currentColor" opacity=".7">1 Adams has no ancestor → no row → dropped</text>
+
+        <!-- join back -->
+        <line x1="16" y1="212" x2="680" y2="212" stroke="currentColor" stroke-width="1" opacity=".25"/>
+        <text x="16" y="234" font-size="11" font-family="monospace" fill="currentColor">
+          <tspan opacity=".6">joined back:</tspan>
+          <tspan font-weight="700"> cte.__grain_start = employee.employee_id</tspan>
+        </text>
+        <text x="16" y="256" font-size="11" font-family="monospace" fill="currentColor" opacity=".7">the old construction joined cte.employee_id = employee.employee_id —</text>
+        <text x="16" y="272" font-size="11" font-family="monospace" fill="currentColor" opacity=".7">each row to ITSELF, which is why traversing expressed nothing</text>
+      </svg>
+    </div>
+    <figcaption>
+      <code>__grain_depth</code> bounds runaway recursion; <code>__grain_path</code> carries
+      every ancestor visited so a cycle in the <em>data</em> terminates the walk. The two
+      guard different failure modes — a depth bound alone lets a two-node cycle spin until
+      the bound is hit, and a path array alone still needs a floor for data that is simply
+      deep.
+    </figcaption>
+  </figure>
+
+  <div class="panel">
+    <div class="panel-head"><span>traced sql · abridged</span><b>spec D — headcount by ancestor</b></div>
+    <pre>WITH RECURSIVE employee_manager_cte_0(<b>__grain_start</b>, employee_id, last_name, <span class="dim">… 13 more cols</span>, <b>__grain_depth</b>, <b>__grain_path</b>) AS
+  (SELECT <u>start_0</u>.employee_id AS __grain_start,
+          <i>parent_0</i>.employee_id, <i>parent_0</i>.last_name, <span class="dim">…</span>,
+          1 AS __grain_depth,
+          ARRAY[<i>parent_0</i>.employee_id] AS __grain_path
+   FROM employee AS <u>start_0</u> JOIN employee AS <i>parent_0</i>
+        ON <u>start_0</u>.reports_to = <i>parent_0</i>.employee_id
+   UNION ALL
+   SELECT employee_manager_cte_0.__grain_start,
+          <i>higher_0</i>.employee_id, <i>higher_0</i>.last_name, <span class="dim">…</span>,
+          employee_manager_cte_0.__grain_depth + 1,
+          employee_manager_cte_0.__grain_path || ARRAY[<i>higher_0</i>.employee_id]
+   FROM employee_manager_cte_0 JOIN employee AS <i>higher_0</i>
+        ON employee_manager_cte_0.reports_to = <i>higher_0</i>.employee_id
+   WHERE employee_manager_cte_0.__grain_depth &lt; 10
+     AND NOT (<i>higher_0</i>.employee_id = ANY (employee_manager_cte_0.__grain_path)))
+SELECT employee_manager_cte_0.employee_id AS "Employee_Manager.id",
+       employee_manager_cte_0.last_name AS "Employee_Manager.last_name",
+       count(distinct employee.employee_id) AS employee_count
+FROM employee JOIN employee_manager_cte_0
+     ON employee_manager_cte_0.__grain_start = employee.employee_id
+GROUP BY employee_manager_cte_0.employee_id, employee_manager_cte_0.last_name
+ORDER BY employee_count DESC</pre>
+    <div class="panel-body">
+      <table>
+        <thead><tr><th>Employee_Manager.id</th><th>Employee_Manager.last_name</th><th>employee_count</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Adams</td><td>7</td></tr>
+          <tr><td>2</td><td>Edwards</td><td>3</td></tr>
+          <tr><td>6</td><td>Mitchell</td><td>2</td></tr>
+        </tbody>
+      </table>
+      <p style="margin:.9rem 0 0; font-size:.85rem; color:var(--ink-soft)">
+        Matches hand-written recursive SQL exactly. <span class="chip rewrite">additive: false</span>
+        — 7 + 3 + 2 = 12 against a true headcount of 8, which is precisely what the flag
+        says: every group correct, the total meaningless.
+      </p>
+    </div>
+  </div>
+
+  <div class="col">
+    <h3>Dotted filters become EXISTS — and where that went wrong</h3>
+    <p>
+      Every dotted filter compiles to <code>EXISTS</code>, fanning or not. Across a fanning
+      hop a join would return one row per matching child and multiply the parent. Across a
+      non-fanning hop there is no multiplying risk, but the target table is only in FROM if
+      the same link also appears in <code>traverse</code> — and a plain WHERE on an unjoined
+      table becomes an implicit, unconditional cartesian product that SQLAlchemy adds
+      silently. EXISTS carries its own join condition, so that is unconstructible rather
+      than merely unlikely.
+    </p>
+    <p>
+      The subtlety is which table the subquery is built <em>from</em>. It must be the
+      link's target <strong>object</strong>, never the table the filtered property happens
+      to sit on — those differ whenever the property is reached through one of the object's
+      own joins:
+    </p>
+  </div>
+
+  <div class="two-up">
+    <div class="panel">
+      <div class="panel-head"><span><span class="chip refuse">was</span></span><b>cartesian product</b></div>
+      <pre>WHERE EXISTS (
+  SELECT 1
+  FROM <s>genre, track</s>
+  WHERE album.album_id = track.album_id
+    AND genre.name = 'Jazz')
+
+<span class="dim">-- no track.genre_id = genre.genre_id
+-- means: "this album has any track,
+-- and some genre called Jazz exists
+-- anywhere"</span></pre>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span><span class="chip inline">traced now</span></span><b>spec C</b></div>
+      <pre>WHERE EXISTS (
+  SELECT 1
+  FROM <u>track</u>
+  LEFT OUTER JOIN genre AS <i>genre_1</i>
+    ON <u>track</u>.genre_id
+     = <i>genre_1</i>.genre_id
+  WHERE album.album_id = <u>track</u>.album_id
+    AND <i>genre_1</i>.name = 'Jazz')</pre>
+    </div>
+  </div>
+
+  <div class="col">
+    <p>
+      The <code>via</code> join is applied <em>inside</em> the subquery and the predicate
+      binds to the joined column. Four specs in the shipped ontology hit the broken shape;
+      it returned <strong>347 of 347 albums</strong> for a filter that matches 13, and a
+      Rock-only album passed a Jazz filter. It now returns 13. The outer join is kept
+      rather than made inner because it stays faithful to the declaration — an
+      <code>is_null</code> filter on a left-joined property means "reached this row, and it
+      has no match", which an inner join would make unsatisfiable.
+    </p>
+    <p>
+      The correlated side is read from <code>metadata</code> rather than from a
+      <code>Scope</code>, and that is safe for a specific reason: a dotted filter is always
+      anchored on the root object, and the root's own tables are the one thing
+      <code>Scope</code> never aliases — they are registered first, so nothing can collide
+      with them.
+    </p>
+
+    <h3>Aggregate-then-join, and its two Scopes</h3>
+    <p>
+      When a metric must be pre-aggregated, the subquery starts at the root and walks
+      outward — applying <code>mp.subquery_edges</code> edges, which is the longer of "the
+      prefix reaching the grain" and "far enough to carry every group key". It gets its
+      <strong>own</strong> <code>Scope</code>, because it is an independent FROM: a table
+      aliased there has nothing to do with the outer query's element for the same table.
+    </p>
+    <p>
+      The instrumentation caught both scopes in spec B — two distinct objects, registering
+      different amounts of the same path:
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span>traced</span><b>Scope.register calls, spec B</b></div>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>scope</th><th>position</th><th>table</th><th>element</th></tr></thead>
+        <tbody>
+          <tr><td><code>#5712</code> outer</td><td>root</td><td><code>customer</code></td><td>Table <code>customer</code></td></tr>
+          <tr><td><code>#5712</code> outer</td><td>hop1</td><td><code>invoice</code></td><td>Table <code>invoice</code></td></tr>
+          <tr><td><code>#5712</code> outer</td><td>hop2</td><td><code>invoice_line</code></td><td>Table <code>invoice_line</code></td></tr>
+          <tr><td><code>#2864</code> subquery</td><td>root</td><td><code>customer</code></td><td>Table <code>customer</code></td></tr>
+          <tr><td><code>#2864</code> subquery</td><td>hop1</td><td><code>invoice</code></td><td>Table <code>invoice</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="col">
+    <p>
+      The subquery stops at <code>hop1</code>. Applying <code>Invoice_Lines</code> there
+      would replicate the invoice rows inside the very subquery built to stop that
+      happening — the same bug, one level down. Positions are full-path indices in both,
+      so a qualified group key resolves to the same object either side.
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><span>traced sql</span><b>spec B — invoice_total over a fanning path</b></div>
+    <pre>SELECT customer.country AS country,
+       <i>invoice_total_at_invoice</i>.invoice_total AS invoice_total
+FROM customer
+  JOIN invoice ON customer.customer_id = invoice.customer_id
+  JOIN invoice_line ON invoice.invoice_id = invoice_line.invoice_id
+  LEFT OUTER JOIN (
+      SELECT customer.country AS country, sum(invoice.total) AS invoice_total
+      FROM customer JOIN invoice ON customer.customer_id = invoice.customer_id
+      GROUP BY customer.country
+  ) AS <i>invoice_total_at_invoice</i>
+  ON customer.country <b>IS NOT DISTINCT FROM</b> <i>invoice_total_at_invoice</i>.country
+GROUP BY customer.country, <i>invoice_total_at_invoice</i>.invoice_total</pre>
+    <div class="panel-body">
+      <p style="margin:0; font-size:.85rem; color:var(--ink-soft)">
+        24 groups totalling <strong>2328.60</strong> — the correct figure, over a path whose
+        naive form gives 20848.62. Reported as
+        <span class="chip rewrite">aggregate_then_join</span>, <code>forced_by:
+        Invoice_Lines</code>, <code>reason: "Invoice_Lines is one_to_many"</code>.
+      </p>
+    </div>
+  </div>
+
+  <div class="col">
+    <p>
+      Two details in that statement carry more weight than their size suggests.
+    </p>
+    <p>
+      <strong><code>IS NOT DISTINCT FROM</code>, not <code>=</code>.</strong>
+      <code>customer.country</code> is nullable, and <code>NULL = NULL</code> is NULL, not
+      true — so under plain equality every row whose key is NULL misses its own group. A
+      silent undercount, of exactly the kind this engine exists to make unreachable. The
+      operator is chosen per key from three independent sources, with the database
+      authoritative: a hand-written <code>nullable: false</code> over a genuinely nullable
+      column cannot weaken it.
+    </p>
+    <p>
+      <strong>No <code>coalesce(…, 0)</code>.</strong> The outer key set is a subset of the
+      subquery's — both start at the same root under the same filters, and the outer's
+      extra edges are inner joins, which can only drop keys, never invent one. So a miss
+      is not "a group with no facts"; it is a key that failed to match a key it should
+      have matched, and the only way that happens is a broken comparison. A zero there
+      would repaint that as a plausible number. <code>NULL</code> leaves the fault visible.
+    </p>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<section>
+  <div class="stage-label">
+    <span class="stage-num">05</span>
+    <h2>Four specs, end to end</h2>
+  </div>
+
+  <div class="col">
+    <p>
+      The same pipeline, four different shapes. Rows are the real returned values.
+    </p>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th>Spec</th><th>Shape exercised</th><th>Verdict</th><th>Result</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>A</b></td>
+          <td>Metric at the far end of a fanning path</td>
+          <td><span class="chip inline">inline</span></td>
+          <td>24 groups, sum <code>2328.60</code>. Argentina 37.62, Spain 37.62, Italy 37.62 …</td>
+        </tr>
+        <tr>
+          <td><b>B</b></td>
+          <td>Coarse metric, fanning edge downstream of its grain</td>
+          <td><span class="chip rewrite">rewrite</span></td>
+          <td>24 groups, sum <code>2328.60</code>. Netherlands 40.62, Brazil 190.10, Canada 303.96 …</td>
+        </tr>
+        <tr>
+          <td><b>C</b></td>
+          <td>Dotted filter through a spanned table</td>
+          <td><span class="chip inline">EXISTS</span></td>
+          <td>Blue Moods, Heart of the Night, Miles Ahead, Morning Dance … <span class="chip neutral">limit_reached</span></td>
+        </tr>
+        <tr>
+          <td><b>D</b></td>
+          <td>Qualified key over a recursive closure</td>
+          <td><span class="chip inline">inline</span> <span class="chip rewrite">non-additive</span></td>
+          <td>Adams 7, Edwards 3, Mitchell 2</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      And spec H, the same as A but ordered and limited, shows the two fields that were
+      added together — because either alone is a trap:
+    </p>
+  </div>
+
+  <pre class="plain">ORDER BY revenue DESC LIMIT 5
+  → USA 523.06 · Canada 303.96 · France 195.10 · Brazil 190.10 · Germany 156.48
+  → <b>limit_reached: true</b>
+
+<span style="opacity:.6">Before order_by was implemented this spec returned five arbitrary countries,
+correctly computed, with USA — the largest — absent and nothing to say so.</span></pre>
+</section>
+
+<!-- ============================================================ -->
+<section>
+  <div class="stage-label">
+    <span class="stage-num">06</span>
+    <h2>The invariants that keep the two apart</h2>
+  </div>
+
+  <div class="scroll">
+    <table>
+      <thead>
+        <tr><th></th><th>resolve.py</th><th>compile.py</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>Knows about</b></td>
+          <td>The ontology</td>
+          <td>The ontology, reflected <code>MetaData</code>, and the plan</td>
+        </tr>
+        <tr>
+          <td><b>May decide</b></td>
+          <td>Whether a name exists and whether a path is walkable</td>
+          <td>Nothing about grain — every verdict arrived already made</td>
+        </tr>
+        <tr>
+          <td><b>Reads data</b></td>
+          <td>Never</td>
+          <td>Never — it emits a statement, it does not run one</td>
+        </tr>
+        <tr>
+          <td><b>Failure means</b></td>
+          <td>The request named something that does not exist, or a path that does not connect</td>
+          <td>The plan could not be rendered — a narrow, enumerable set</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="col">
+    <p>
+      One honest wrinkle in that last row. <code>compile.py</code>'s docstring says it
+      "decides nothing", and it very nearly doesn't — but it still raises in two places:
+      when only rewritten metrics are present with no keys to rejoin them on (there is no
+      correct query to emit, so it refuses rather than guessing), and when a spec asks for
+      no group key and no metric at all. Both are structural, not grain judgements. Worth
+      knowing before trusting the docstring literally.
+    </p>
+    <p>
+      The reason the separation is worth this much care is that four of the five critical
+      defects found in review produced <em>correct-looking SQL</em>. A statement that
+      compiles, runs, and returns plausible rows is not evidence of anything. What makes
+      the answer checkable is that each stage can only be wrong in its own way — and that
+      the compiled SQL rides back on every result, byte-identical to what
+      <code>explain()</code> showed, because planning reads only the spec and the ontology.
+    </p>
+  </div>
+</section>
+
+<footer class="col">
+  <p>
+    Traced against chinook v1.4.5 on PostgreSQL 17 by instrumenting
+    <code>Scope.register</code> and <code>Scope.column</code> and running eight specs
+    through <code>resolve()</code> → <code>analyse()</code> → <code>compile_query()</code>.
+    Source: <code>src/grain/engine/resolve.py</code>,
+    <code>src/grain/engine/compile.py</code>, <code>src/grain/engine/grain.py</code>.
+  </p>
+</footer>
+
+</div>
