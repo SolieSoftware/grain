@@ -177,7 +177,8 @@ links:
 metrics:
   revenue:
     grain: invoice_line
-    expr: "sum(invoice_line.unit_price * invoice_line.quantity)"
+    agg: sum
+    value: "invoice_line.unit_price * invoice_line.quantity"
     type: decimal
     description: Money actually taken, at line grain. The correct revenue figure.
     ai_context:
@@ -188,7 +189,8 @@ metrics:
 
   invoice_total:
     grain: invoice
-    expr: "sum(invoice.total)"
+    agg: sum
+    value: "invoice.total"
     type: decimal
     description: >
       Invoice header totals. Equals revenue only when evaluated at invoice grain.
@@ -200,22 +202,26 @@ metrics:
 
   units_sold:
     grain: invoice_line
-    expr: "sum(invoice_line.quantity)"
+    agg: sum
+    value: "invoice_line.quantity"
     type: integer
 
   track_count:
     grain: track
-    expr: "count(distinct track.track_id)"
+    agg: count_distinct
+    value: "track.track_id"
     type: integer
 
   customer_count:
     grain: customer
-    expr: "count(distinct customer.customer_id)"
+    agg: count_distinct
+    value: "customer.customer_id"
     type: integer
 
   employee_count:
     grain: employee
-    expr: "count(distinct employee.employee_id)"
+    agg: count_distinct
+    value: "employee.employee_id"
     type: integer
     description: Headcount, at employee grain.
     ai_context:
