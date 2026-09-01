@@ -13,9 +13,13 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "sqlacodegen>=3.0", "ruff>=0.6"]
 mcp = ["mcp>=1.0"]
+# Optional: the chat agent. The library, CLI and MCP paths must keep working
+# without it, so `grain.agent` imports the SDK lazily.
+agent = ["anthropic>=1.0"]
 
 [project.scripts]
 grain = "grain.engine.cli:main"
+grain-chat = "grain.agent.cli:main"
 
 [build-system]
 requires = ["hatchling"]

@@ -320,6 +320,44 @@ found without anyone hand-computing the expected figure. It caught a type leak
 on its first run: `units_sold` declares `integer`, and the encoding was returning
 `Decimal`.
 
+## Chatting to it
+
+`grain chat` puts an agent in front of the engine. It answers questions in plain
+English by emitting a `QuerySpec` — never SQL.
+
+```bash
+uv pip install -e ".[agent]"
+export ANTHROPIC_API_KEY=...
+grain-chat --engine symmetric --show-spec
+```
+
+**The model has no way to write SQL, and that is the design.** Its only channel
+into the engine is one tool whose input schema *is*
+`QuerySpec.model_json_schema()` — the same object the engine validates against,
+so the contract the model is held to cannot drift from the contract that is
+enforced. Three layers stand behind it: strict tool use constrains the
+generation, Pydantic validates it, and `resolve`/`analyse` refuse anything that
+names something undeclared or has no correct answer. A bad generation's worst
+case is a typed error at the door, not a plausible wrong number.
+
+The system prompt is `describe()` — grain's own output, not the DDL and not a
+hand-written summary that could drift from it. A refused query is fed back with
+its `alternatives` and the agent retries; grain's errors were built to name a
+legal next move, which is exactly what makes them usable as repair instructions.
+The budget is three attempts, after which the agent explains rather than
+retries.
+
+Caveats travel with the data, attached by code rather than left to the prompt: a
+non-additive result carries an explicit instruction not to total it, and a
+truncated one says so. A model that summed a non-additive column would undo the
+point of the engine, and an instruction alone is not a strong enough guarantee.
+
+**Its weak point is metric selection, and it is the same weak point the engine
+has.** The engine guarantees the number is computed correctly; nothing
+guarantees the agent picked the metric the person meant. Where two metrics both
+sound like "revenue", only `ai_context` prose distinguishes them. Design notes:
+[`docs/plans/2026-08-28-query-agent-design.md`](docs/plans/2026-08-28-query-agent-design.md).
+
 ## What is not done
 
 - **No second domain.** The reuse claim above is untested against a real alternative.
@@ -334,6 +372,13 @@ on its first run: `units_sold` declares `integer`, and the encoding was returnin
   `engine/resolve.py` deliberately, so a resolution bug shows up as disagreement
   rather than being inherited by both. A fix to one is not a fix to the other;
   `test_resolver_parity` makes drift visible but cannot prevent it.
+- **The agent has never been run against the live API.** It is unit-tested
+  against a scripted client — the loop, the repair budget, the caveat handling
+  and the schema are all covered — but no credential was available on the
+  machine it was built on, so the request has not once been accepted by
+  Anthropic. Treat first use as the real test.
+- **No evaluation set for the agent.** Nothing measures how often it picks the
+  right metric, which is the thing most likely to be wrong.
 - **Metric selection is a known limit.** The engine guarantees the answer is
   *computed* correctly. It cannot guarantee the *right question was asked* — if two
   metrics both sound like "revenue", only prose in `ai_context` distinguishes them.
