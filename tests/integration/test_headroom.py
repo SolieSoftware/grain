@@ -5,7 +5,6 @@ K = 1e30 the bound is 5e29, unreachable for monetary and count data — but
 "unreachable" was reasoning about money, not a measurement.
 """
 import pytest
-from sqlalchemy import MetaData
 
 from grain.domains.chinook import CHINOOK_DIR
 from grain.engine.errors import OntologyError
