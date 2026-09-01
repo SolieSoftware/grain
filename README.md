@@ -3,11 +3,13 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development.** All 16 planned tasks are complete and **241 tests
+**Status: in development.** All 16 planned tasks are complete and **344 tests
 pass**. The **five critical defects** a whole-branch review found on 2026-08-18
 were fixed on 2026-08-24, each with a measured regression test at the facade —
 see *"Defects found and fixed"* below. **I3** (recursive traversal) is fixed too,
 by building the qualified-group-key mechanism it needed.
+
+There are now **two selectable engines** — see *"Two engines"* below.
 
 The comparison that would justify the project — against raw text-to-SQL — has
 still **not been run**, and there is still only one domain pack.
@@ -89,7 +91,7 @@ revenue it holds. Grouped by name they were one group of 4215.42. See **C1** and
 |---|---|---|
 | Physical | PostgreSQL + generated SQLAlchemy models | Yes |
 | Logical | `ontology.yaml` — object types, links, metrics | Yes |
-| Engine | resolve → grain analysis → compile → guard → execute | **No** |
+| Engine | resolve → grain analysis → compile, per engine | **No** |
 | Adapters | library · CLI · MCP | No |
 
 ### What the ontology must declare
@@ -255,12 +257,83 @@ track, so a playlist holding two tracks from one album would appear twice in tha
 album's group. The wider rule is a non-goal until something measures that it is
 needed.
 
+## Two engines
+
+Both answer the same `QuerySpec` over the same ontology, and differ only in how
+they keep a fanned join from double-counting.
+
+| | `subquery` (default) | `symmetric` |
+|---|---|---|
+| Method | pre-aggregate the metric at its own grain, `LEFT JOIN` it back | one pass, `SUM(DISTINCT k*K + v) - SUM(DISTINCT k*K)` |
+| Metric forms | `expr` and `agg`/`value` | `agg`/`value` only |
+| Key beyond the grain | refused (`KeyBeyondGrain`) | answered |
+| Non-unique group key over many-to-many | refused (`NonAdditiveRefused`) | answered |
+| Speed | faster for a single metric | unestablished — see below |
+
+```bash
+grain query --engine symmetric --spec '{"object":"Playlist", ...}'
+```
+
+```python
+Grain.load(domain_dir, engine, engine_name="symmetric")
+```
+
+The symmetric engine is a **specialist, not a superset**: it implements only the
+aggregate taxonomy, and refuses a metric it cannot serve (opaque `expr`, an
+inexact type, or a grain table without a single-column integer primary key)
+rather than quietly falling back. An engine that answered via a different
+strategy than the one asked for would make the differential harness meaningless.
+
+**What it fixes.** Fan-out replication — one grain row counted several times
+*inside* one group. Through `Playlist → Track → InvoiceLine` the naive sum
+reports 5738.28 where the true total is 2328.60; the symmetric engine returns
+2328.60 exactly. It also answers two shapes the subquery engine has to refuse,
+because the encoding dedupes by the grain's primary key: defect **C2**'s
+non-unique group key (the two playlists named *Music* return 2107.71 each,
+correctly) and a group key reached across a fan.
+
+**What it does not fix.** Overlapping groups — one grain row legitimately
+belonging to *several* groups. Revenue by playlist still sums to 5738.28 across
+groups against a true 2328.60, because a track sits on many playlists. That
+double-counting is the question, not the SQL, so it stays `additive: false`
+under both engines. Looker has the same limitation.
+
+**Why not Looker's version.** Looker hashes the key and `FLOOR`-scales the value
+into a fixed-width `NUMERIC(38,0)`, buying portability across MySQL, Redshift
+and BigQuery at the cost of two silent failure modes: hash collisions drop a
+row's value, and truncation loses digits. grain is Postgres-only, where `numeric`
+is arbitrary-precision, so it uses the real integer key unscaled — no collisions,
+no truncation.
+
+**Speed is not a reason to switch.** chinook is too small to time: the same
+query measured 15.8 ms and 23.2 ms on separate runs. The one gap large enough to
+trust has the symmetric engine **4× slower** on a single-metric query (17.9 ms
+against 4.2 ms), because `SUM(DISTINCT ...)` sorts the whole fanned row set.
+Choose it for what it can answer, not for how fast.
+
+### The engines check each other
+
+`tests/integration/test_engine_agreement.py` runs a shared corpus through both
+and asserts identical rows. Because they share nothing below the loaded ontology
+— each owns its own resolver — a disagreement is a real defect in one of them,
+found without anyone hand-computing the expected figure. It caught a type leak
+on its first run: `units_sold` declares `integer`, and the encoding was returning
+`Decimal`.
+
 ## What is not done
 
 - **No second domain.** The reuse claim above is untested against a real alternative.
 - **No golden set and no ablation.** Whether this beats raw text-to-SQL on a fixed
   question set is the project's actual claim, and it is unmeasured.
 - **No writeback**, no inference, no entity resolution, no caching. Read-only.
+- **The symmetric encoding's bound is only checked at load.** It needs
+  `|v| < 5e29`; the loader measures the observed maximum, but rows written
+  afterwards can cross it and condition (b) then fails silently. A
+  self-enforcing SQL guard is designed and held in reserve.
+- **The two resolvers are a copy.** `engine_symmetric/resolve.py` duplicates
+  `engine/resolve.py` deliberately, so a resolution bug shows up as disagreement
+  rather than being inherited by both. A fix to one is not a fix to the other;
+  `test_resolver_parity` makes drift visible but cannot prevent it.
 - **Metric selection is a known limit.** The engine guarantees the answer is
   *computed* correctly. It cannot guarantee the *right question was asked* — if two
   metrics both sound like "revenue", only prose in `ai_context` distinguishes them.
