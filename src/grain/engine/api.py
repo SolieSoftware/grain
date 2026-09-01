@@ -64,7 +64,10 @@ class Grain:
         domain_dir = Path(domain_dir)
         metadata = MetaData()
         metadata.reflect(bind=engine)
-        ontology = load_ontology(domain_dir / "ontology.yaml", metadata)
+        # The engine is passed so the loader can run the checks that must read
+        # data -- currently the symmetric encoding's headroom bound. Structural
+        # validation needs no connection and runs either way.
+        ontology = load_ontology(domain_dir / "ontology.yaml", metadata, engine)
         return cls(ontology, metadata, engine, guard, engine_name)
 
     def _plan(self, spec: QuerySpec) -> EnginePlan:

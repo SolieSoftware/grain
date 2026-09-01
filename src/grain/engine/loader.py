@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 import yaml
-from sqlalchemy import MetaData, UniqueConstraint
+from sqlalchemy import Engine, MetaData, UniqueConstraint, text
 
 from .errors import OntologyError
 from .ontology import ColumnRef, Metric, ObjectType, Ontology, Property, TableJoin
@@ -97,7 +97,13 @@ _OntologyLoader.add_implicit_resolver(
 )
 
 
-def load_ontology_from_string(text: str, metadata: MetaData) -> Ontology:
+def load_ontology_from_string(
+    text: str, metadata: MetaData, engine: Engine | None = None
+) -> Ontology:
+    """`engine` is optional and only enables the checks that must READ DATA
+    (see `_check_symmetric_headroom`). Every other check is structural, so an
+    ontology still loads and validates with no database connection -- which is
+    what keeps the unit tests hermetic."""
     raw = yaml.load(text, Loader=_OntologyLoader)
     if not isinstance(raw, dict):
         raise OntologyError("Ontology file must be a YAML mapping")
@@ -109,12 +115,16 @@ def load_ontology_from_string(text: str, metadata: MetaData) -> Ontology:
                 )
             body.setdefault("name", name)
     onto = Ontology.model_validate(raw)
-    validate(onto, metadata)
+    validate(onto, metadata, engine)
     return onto
 
 
-def load_ontology(path: Path, metadata: MetaData) -> Ontology:
-    return load_ontology_from_string(path.read_text(encoding="utf-8"), metadata)
+def load_ontology(
+    path: Path, metadata: MetaData, engine: Engine | None = None
+) -> Ontology:
+    return load_ontology_from_string(
+        path.read_text(encoding="utf-8"), metadata, engine
+    )
 
 
 def _require_table(metadata: MetaData, table: str, context: str) -> None:
@@ -357,7 +367,9 @@ def _validate_metric_expr(metric: Metric, metadata: MetaData) -> None:
         )
 
 
-def validate(onto: Ontology, metadata: MetaData) -> None:
+def validate(
+    onto: Ontology, metadata: MetaData, engine: Engine | None = None
+) -> None:
     for obj in onto.objects.values():
         ctx = f"object '{obj.name}'"
         _require_table(metadata, obj.primary, ctx)
@@ -405,3 +417,51 @@ def validate(onto: Ontology, metadata: MetaData) -> None:
 
     for metric in onto.metrics.values():
         _validate_metric_expr(metric, metadata)
+
+    if engine is not None:
+        _check_symmetric_headroom(onto, metadata, engine)
+
+
+def _check_symmetric_headroom(
+    onto: Ontology, metadata: MetaData, engine: Engine
+) -> None:
+    """Verify every symmetric-eligible metric's values fit the encoding's bound.
+
+    `engine_symmetric.symmetric` needs |v| < K/2 so that distinct keys give
+    distinct encoded terms -- its condition (b). At K = 1e30 the bound is 5e29,
+    which is unreachable for monetary and count data. But "unreachable" was
+    reasoning about money, not a measurement, and this codebase spent a whole
+    branch replacing exactly that kind of reasoning with a check.
+
+    It is a CHECK, NOT A GUARANTEE. It sees the data present at load; rows
+    written afterwards can cross the bound with no error, because condition (b)
+    fails silently rather than loudly. That residual risk is the design's
+    weakest point and the reason a self-enforcing SQL guard is kept in reserve
+    rather than discarded.
+
+    Deliberately NOT a refusal of ineligible metrics. Opaque, inexactly-typed
+    and composite-key metrics are refused by the symmetric PLANNER, not here,
+    because refusing them at load would make an ontology containing one opaque
+    metric fail to load for the subquery engine too -- which serves them
+    correctly today. Eligibility is per-engine; this bound is a fact about data.
+    """
+    from ..engine_symmetric.symmetric import BOUND, EXACT_TYPES
+
+    eligible = [
+        m for m in onto.metrics.values()
+        if m.is_structured and m.agg in ("sum", "avg") and m.type in EXACT_TYPES
+    ]
+    if not eligible:
+        return
+    with engine.connect() as conn:
+        for metric in eligible:
+            observed = conn.execute(
+                text(f"select max(abs({metric.value})) from {metric.grain}")
+            ).scalar()
+            if observed is not None and abs(observed) >= BOUND:
+                raise OntologyError(
+                    f"metric '{metric.name}' has an observed maximum absolute "
+                    f"value of {observed}, which leaves no headroom under the "
+                    f"symmetric encoding's bound of {BOUND}. Use only the "
+                    f"'subquery' engine for it, or reduce its magnitude."
+                )
