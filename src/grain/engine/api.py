@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import Engine, MetaData
 
 from ..plan import EnginePlan, engine_names, get_engine
+from ..engine_symmetric import adapter as _symmetric  # noqa: F401  -- registers "symmetric"
 from . import adapter  # noqa: F401  -- import registers the "subquery" engine
 from .compile import sql_text
 from .execute import Result, execute

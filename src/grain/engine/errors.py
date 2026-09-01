@@ -191,6 +191,54 @@ class NonAdditiveRefused(GrainError):
         self.metric, self.grain, self.link = metric, grain, link
 
 
+class MetricNotSymmetric(GrainError):
+    """The symmetric engine was asked for a metric it cannot serve.
+
+    It fires however the engine was chosen -- per-call argument, environment, or
+    default. Selecting an engine is not a hint to be silently overridden: an
+    engine that quietly answered via a different strategy than the one asked for
+    would make the differential harness meaningless, because agreement would
+    stop proving that two implementations agree.
+
+    The symmetric engine is a specialist, not a superset. It implements only the
+    aggregate taxonomy and has no `aggregate_then_join` of its own -- duplicating
+    that rewrite would double the most intricate function in the project for no
+    differential gain, when the subquery engine already owns it and is one flag
+    away.
+    """
+
+    def __init__(self, metric: str, reason: str) -> None:
+        self.metric = metric
+        self.reason = reason
+        super().__init__(
+            f"Metric '{metric}' cannot be computed symmetrically: {reason}. Use "
+            f"the 'subquery' engine, which computes it by pre-aggregating at its "
+            f"own grain.",
+            ["engine='subquery'"],
+        )
+
+
+class NoIntegerKeyForGrain(GrainError):
+    """The metric's grain table has no single-column integer primary key.
+
+    Separate from `MetricNotSymmetric` because the fix is different: this is a
+    property of the SCHEMA, not of the metric declaration, so no ontology edit
+    resolves it. The symmetric encoding needs a key that identifies one row and
+    that can carry an exact numeric offset; a composite or text key can do
+    neither without the hashing this design rejects.
+    """
+
+    def __init__(self, metric: str, grain_table: str) -> None:
+        self.metric = metric
+        self.grain_table = grain_table
+        super().__init__(
+            f"Metric '{metric}' has grain '{grain_table}', which has no "
+            f"single-column integer primary key. The symmetric form needs one to "
+            f"identify a row. Use the 'subquery' engine for this metric.",
+            ["engine='subquery'"],
+        )
+
+
 class GuardTripped(GrainError):
     def __init__(
         self, limit_name: str, limit_value: int, alternatives: list[str] | None = None
