@@ -311,6 +311,26 @@ trust has the symmetric engine **4× slower** on a single-metric query (17.9 ms
 against 4.2 ms), because `SUM(DISTINCT ...)` sorts the whole fanned row set.
 Choose it for what it can answer, not for how fast.
 
+### What neither engine can do
+
+`tests/integration/test_shared_limits.py` pins the limitations, so a later claim
+to have fixed one has to delete a test rather than merely assert. Each is a hard
+limit in the BI literature, measured here against chinook.
+
+| Limitation | What happens |
+|---|---|
+| **A quantity that was never additive** | `sum(track.unit_price)` is arithmetically perfect and semantically meaningless. Both engines report `additive: true`, no caveat. **The most dangerous case, because nothing looks wrong.** |
+| **Overlapping groups** | Revenue by playlist sums to 5738.28 against a true 2328.60. Both flag `additive: false`; neither can give a correct total. |
+| **Branching traversal** | `traverse` is a path, not a tree, so the chasm trap is inexpressible. Both refuse — with an error that describes a chain, not the branch that was asked for. |
+| **Medians and percentiles** | No distinct-sum rewrite exists, so `AggFunc` offers none. As an opaque `expr` the subquery engine answers; the symmetric engine refuses. |
+| **`limit` without `order_by`** | Arbitrary rows, legally. The two engines may return *different* rows for one spec — the only place their output may differ without either being wrong. |
+
+The first is the honest headline. grain validates a metric's **grain** — that its
+rows are not replicated — and has no concept of whether the **quantity** is
+additive by nature. A price, a rate, a ratio, a running balance: all sum
+cleanly, none should. No aggregate technique fixes that, because it is the wrong
+operation on the right rows.
+
 ### The engines check each other
 
 `tests/integration/test_engine_agreement.py` runs a shared corpus through both
