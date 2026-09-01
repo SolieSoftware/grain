@@ -46,7 +46,16 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Column, MetaData, Numeric, cast, distinct, func, literal_column
+from sqlalchemy import (
+    Column,
+    Integer,
+    MetaData,
+    Numeric,
+    cast,
+    distinct,
+    func,
+    literal_column,
+)
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..engine.errors import MetricNotSymmetric, NoIntegerKeyForGrain
@@ -120,6 +129,25 @@ def require_eligible(metric: Metric, metadata: MetaData) -> None:
         grain_key(metric, metadata)
 
 
+
+def _as_declared(metric: Metric, expr: ColumnElement[Any]) -> ColumnElement[Any]:
+    """Return the metric in the type it declares.
+
+    The encoding is numeric arithmetic whatever the value's own type, so a
+    metric declared `integer` would otherwise come back as `Decimal` from this
+    engine and `int` from the subquery engine. The differential harness caught
+    exactly that on `units_sold`: same number, different type, and a caller
+    serialising the two would see a real difference.
+
+    Safe because the encoding is EXACT -- the sum of integers it recovers is an
+    integer already, so this cast cannot round anything. It is applied only to
+    `sum`; see `avg`.
+    """
+    if metric.type == "integer":
+        return cast(expr, Integer)
+    return expr
+
+
 def symmetric_expr(metric: Metric, metadata: MetaData) -> ColumnElement[Any]:
     """The metric as a single-pass, fan-out-correct aggregate."""
     require_eligible(metric, metadata)
@@ -141,12 +169,14 @@ def symmetric_expr(metric: Metric, metadata: MetaData) -> ColumnElement[Any]:
     keys_only = func.sum(distinct(offset))
 
     if metric.agg == "sum":
-        return encoded - keys_only
+        return _as_declared(metric, encoded - keys_only)
     if metric.agg == "avg":
         # `avg` ignores NULL values, so the divisor must count only the rows that
         # contributed to the numerator. A COALESCE-to-zero numerator over an
         # unfiltered count would drag the mean towards zero.
         divisor = func.count(distinct(key)).filter(value.isnot(None))
+        # NOT cast back to the declared type: a mean of integers is not an
+        # integer, and rounding it here would be a silent answer change.
         return (encoded - keys_only) / func.nullif(divisor, 0)
 
     raise MetricNotSymmetric(
