@@ -3,13 +3,15 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development.** All 16 planned tasks are complete and **344 tests
+**Status: in development.** All 16 planned tasks are complete and **391 tests
 pass**. The **five critical defects** a whole-branch review found on 2026-08-18
 were fixed on 2026-08-24, each with a measured regression test at the facade —
 see *"Defects found and fixed"* below. **I3** (recursive traversal) is fixed too,
 by building the qualified-group-key mechanism it needed.
 
-There are now **two selectable engines** — see *"Two engines"* below.
+There are now **two selectable engines** (see *"Two engines"*), a **chat agent**
+that emits validated `QuerySpec`s rather than SQL (see *"Chatting to it"*), and
+an **independent oracle** the engines are checked against (see *"Evaluation"*).
 
 The comparison that would justify the project — against raw text-to-SQL — has
 still **not been run**, and there is still only one domain pack.
@@ -115,12 +117,16 @@ has not been tried yet.
 ## Layout
 
 ```
-src/grain/engine/     ontology · loader · spec · resolve · grain · compile · guard · api
+src/grain/plan.py            the engine seam: EnginePlan + the registry
+src/grain/engine/            ontology · loader · spec · resolve · grain · compile · guard · api
+src/grain/engine_symmetric/  the second engine: its own resolve · grain · compile · symmetric
+src/grain/agent/             the chat agent: session · tools · prompt · cli
 src/grain/domains/chinook/   models.py (generated) · ontology.yaml
-tests/unit/           compile-to-SQL, no database
-tests/integration/    against a loaded chinook, anchored on measured values
+tests/unit/                  compile-to-SQL, no database
+tests/integration/           against a loaded chinook, anchored on measured values
+tools/                       the oracle and the evaluation harnesses (not the test suite)
 docs/architecture.html       the design, with diagrams
-docs/plans/                  the implementation plan this was built from
+docs/plans/                  the plans and designs this was built from
 ```
 
 ## Running it
@@ -129,7 +135,7 @@ docs/plans/                  the implementation plan this was built from
 uv venv && uv pip install -e ".[dev,mcp]"
 cp .env.example .env          # then set GRAIN_DATABASE_URL — see below
 set -a && . ./.env && set +a
-uv run pytest -q              # 241 passing
+uv run pytest -q              # 391 passing
 uv run ruff check src tests   # clean
 ```
 
@@ -141,9 +147,9 @@ run can end report something other than success:
 
 | `GRAIN_DATABASE_URL` | `pytest -q` |
 |---|---|
-| unset | `190 passed, 51 skipped` |
-| `postgresql://user@localhost/chinook` | `3 failed, 190 passed, 48 errors` |
-| `postgresql+psycopg://user@localhost:5432/chinook` | `241 passed` |
+| unset | `270 passed, 121 skipped` |
+| `postgresql://user@localhost/chinook` | `4 failed, 271 passed, 116 errors` |
+| `postgresql+psycopg://user@localhost:5432/chinook` | `391 passed` |
 
 Only the third form runs the measured integration tests:
 
@@ -158,7 +164,7 @@ integration test then errors at fixture setup with `ModuleNotFoundError: No modu
 named 'psycopg2'`.
 
 The unset case is the one to watch, because it reports green. **A run that skipped
-51 tests is the exact failure mode this branch exists to prevent:** four of the five
+121 tests is the exact failure mode this branch exists to prevent:** four of the five
 criticals below returned plausible wrong numbers, so every regression test for them
 asserts a measured value against the database. Skipped, they assert nothing. Check
 the skip count, not the colour.
@@ -377,6 +383,46 @@ has.** The engine guarantees the number is computed correctly; nothing
 guarantees the agent picked the metric the person meant. Where two metrics both
 sound like "revenue", only `ai_context` prose distinguishes them. Design notes:
 [`docs/plans/2026-08-28-query-agent-design.md`](docs/plans/2026-08-28-query-agent-design.md).
+
+## Evaluation
+
+Two engines agreeing proves only that they agree. [`tools/oracle.py`](tools/oracle.py)
+computes each answer in **pure Python from raw rows**, sharing no SQL with either
+engine, so it cannot inherit a misconception from the code it checks. Everything
+below is measured, not asserted.
+
+**Correctness.** [`tools/sweep.py`](tools/sweep.py) enumerates every (root, path,
+group key, metric) combination and checks all three answers:
+
+| | |
+|---|---|
+| 61 combinations | **56 both correct · 5 symmetric-only · 0 wrong · 0 regressions** |
+
+All five divergences are one shape — a non-unique group key over a many-to-many.
+The subquery engine refuses it; hand-writing the `aggregate_then_join` it would
+have emitted confirms the refusal is justified, not over-cautious (`4215.42`
+against a true `2107.71`).
+
+**Performance.** chinook is too small to time — the same query measured 15.8 ms
+and 23.2 ms on separate runs — so [`tools/bench.py`](tools/bench.py) benchmarks
+both SQL shapes on synthetic data:
+
+| grain rows | joined rows | symmetric | pre-aggregate | ratio |
+|---|---|---|---|---|
+| 1,000 | 5,000 | 6.1 ms | 1.5 ms | 4.06× |
+| 100,000 | 500,000 | 320 ms | 68 ms | 4.68× |
+| 1,000,000 | 5,000,000 | 3,508 ms | 668 ms | **5.25×** |
+
+The ratio *widens* with scale, so this is not overhead that amortises away.
+Looker's docs give the mechanism: a symmetric sum costs "on the order of a
+`COUNT(DISTINCT)`". **Choose the symmetric engine for what it can answer, never
+for speed.**
+
+**Against Looker.** [`tools/stress.py`](tools/stress.py) compares grain's
+encoding with Looker's shape. grain is exact where Looker's `FLOOR`-scaling
+loses up to `1.8×10⁻⁶`. The magnitude advantage grain's design claims is **not
+demonstrated** — the reimplementation did not overflow at any magnitude tested
+up to 10²⁸.
 
 ## What is not done
 
