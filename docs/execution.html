@@ -1,0 +1,838 @@
+<title>Anatomy of a grain query</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+  /* Tokens follow docs/architecture.html so the two pages read as one set. */
+  :root{
+    --ground:#F4F5F6; --surface:#FFFFFF; --surface-2:#EAEDEF; --surface-3:#E1E5E9;
+    --ink:#14181D; --ink-2:#56606C; --line:#D3D8DE; --line-2:#BFC6CE;
+    --accent:#B27A16; --accent-soft:#F6E9CC; --accent-line:#D9A94A;
+    --ok:#2C7355; --ok-soft:#DDEDE5;
+    --bad:#A5322A; --bad-soft:#F6E0DD;
+    --mono:"JetBrains Mono",ui-monospace,"SF Mono","Cascadia Mono",Consolas,monospace;
+    --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0F1216; --surface:#161A1F; --surface-2:#1D232A; --surface-3:#252D35;
+      --ink:#E7EBEF; --ink-2:#97A2AE; --line:#2B323A; --line-2:#3A434D;
+      --accent:#E0A94A; --accent-soft:#33280F; --accent-line:#8A6A24;
+      --ok:#57A882; --ok-soft:#16281F;
+      --bad:#E0705F; --bad-soft:#2E1A17;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0F1216; --surface:#161A1F; --surface-2:#1D232A; --surface-3:#252D35;
+    --ink:#E7EBEF; --ink-2:#97A2AE; --line:#2B323A; --line-2:#3A434D;
+    --accent:#E0A94A; --accent-soft:#33280F; --accent-line:#8A6A24;
+    --ok:#57A882; --ok-soft:#16281F;
+    --bad:#E0705F; --bad-soft:#2E1A17;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.62;
+    margin:0; padding:0 20px 96px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1060px;margin:0 auto}
+  .prose{max-width:68ch}
+  a{color:var(--accent)}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--accent-line);outline-offset:2px}
+
+  header{padding:60px 0 28px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    font-family:var(--mono);font-size:.6875rem;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ink-2);margin:0 0 16px;
+  }
+  h1{
+    font-family:var(--mono);font-weight:700;letter-spacing:-.035em;
+    font-size:clamp(2rem,5.2vw,2.9rem);line-height:1.05;
+    margin:0 0 16px;text-wrap:balance;
+  }
+  h1 em{font-style:normal;color:var(--accent)}
+  .standfirst{margin:0;max-width:62ch;color:var(--ink-2);font-size:1.0625rem}
+
+  .facts{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+    gap:1px;background:var(--line);border:1px solid var(--line);margin:30px 0 0;
+  }
+  .fact{background:var(--surface);padding:13px 15px}
+  .fact dt{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--ink-2);margin:0 0 4px;
+  }
+  .fact dd{margin:0;font-family:var(--mono);font-size:1.0625rem;font-variant-numeric:tabular-nums}
+
+  section{padding:52px 0 0}
+  h2{
+    font-family:var(--mono);font-size:1.375rem;font-weight:700;letter-spacing:-.02em;
+    margin:0 0 6px;display:flex;gap:14px;align-items:baseline;text-wrap:balance;
+  }
+  h2 .num{color:var(--accent);font-size:.8125rem;letter-spacing:.1em;flex:none}
+  h3{font-family:var(--mono);font-size:1rem;margin:34px 0 8px;letter-spacing:-.01em}
+  p{margin:0 0 14px}
+  .lede{color:var(--ink-2);margin:0 0 22px;max-width:68ch}
+
+  code,kbd{font-family:var(--mono);font-size:.9em;background:var(--surface-2);padding:.08em .3em;border-radius:2px}
+  pre{
+    font-family:var(--mono);font-size:.8125rem;line-height:1.55;
+    background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent-line);
+    padding:14px 16px;margin:0 0 18px;overflow-x:auto;
+  }
+  pre code{background:none;padding:0;font-size:inherit}
+  .pre-label{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-2);margin:0 0 6px;
+  }
+
+  /* ── stage cards ─────────────────────────── */
+  .stage{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));
+    gap:1px;background:var(--line);border:1px solid var(--line);margin:0 0 20px;
+  }
+  .cell{background:var(--surface);padding:14px 16px}
+  .cell h4{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-2);margin:0 0 8px;font-weight:500;
+  }
+  .cell ul{margin:0;padding-left:1.05em}
+  .cell li{margin:0 0 5px}
+  .cell li:last-child{margin:0}
+  .cell.dies{background:var(--bad-soft)}
+  .cell.dies h4{color:var(--bad)}
+  .cell.dies code{background:transparent;padding:0;color:var(--bad);font-weight:500}
+
+  /* ── tables ──────────────────────────────── */
+  .scroll{overflow-x:auto;margin:0 0 20px;border:1px solid var(--line)}
+  table{border-collapse:collapse;width:100%;font-size:.875rem;background:var(--surface)}
+  th,td{text-align:left;padding:9px 13px;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{
+    font-family:var(--mono);font-size:.625rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-2);background:var(--surface-2);font-weight:500;white-space:nowrap;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.mono,th.mono{font-family:var(--mono);font-size:.8125rem;white-space:nowrap}
+  td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+
+  .tag{
+    font-family:var(--mono);font-size:.6875rem;padding:.12em .45em;border:1px solid var(--line-2);
+    white-space:nowrap;
+  }
+  .tag.good{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+  .tag.warn{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent)}
+  .tag.stop{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
+
+  /* ── figures ─────────────────────────────── */
+  figure{margin:0 0 26px;background:var(--surface);border:1px solid var(--line);padding:20px 20px 0}
+  figure .svg-scroll{overflow-x:auto}
+  figure svg{display:block;width:100%;min-width:640px;max-width:100%;height:auto;color:var(--ink)}
+  figcaption{
+    border-top:1px solid var(--line);margin:18px -20px 0;padding:12px 20px;
+    color:var(--ink-2);font-size:.875rem;
+  }
+  figcaption b{color:var(--ink);font-weight:600}
+
+  .callout{
+    background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--accent);
+    padding:14px 16px;margin:0 0 20px;
+  }
+  .callout p:last-child{margin:0}
+  .callout.stop{border-left-color:var(--bad)}
+
+  footer{margin-top:64px;padding-top:20px;border-top:1px solid var(--line);color:var(--ink-2);font-size:.8125rem}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">grain · execution</p>
+  <h1>Anatomy of a <em>grain</em> query</h1>
+  <p class="standfirst">One <code>QuerySpec</code> from an agent, followed all the way to rows:
+  five pipeline stages, two moments that touch the database, and eight typed ways the request
+  can be refused before it ever compiles. Every trace on this page was captured live against the
+  Chinook database this repo talks to.</p>
+  <dl class="facts">
+    <div class="fact"><dt>Pipeline stages</dt><dd>5</dd></div>
+    <div class="fact"><dt>Database touches</dt><dd>2</dd></div>
+    <div class="fact"><dt>Typed refusals</dt><dd>8 classes</dd></div>
+    <div class="fact"><dt>Tests, with a database</dt><dd>241 pass</dd></div>
+    <div class="fact"><dt>Tests, without one</dt><dd>190 pass</dd></div>
+  </dl>
+</header>
+
+<section>
+  <h2><span class="num">01</span>Before any of this: where the spec comes from</h2>
+  <p class="lede">Nothing in this repository turns English into a <code>QuerySpec</code>. There is
+  no model call, no prompt, no parser — the dependencies are SQLAlchemy, psycopg, pydantic and
+  PyYAML. The translation happens inside whichever agent holds the MCP tools, and the repo's whole
+  contribution to that step is <code>describe()</code>: it publishes the vocabulary and the rules
+  the agent has to respect, in place of a DDL dump.</p>
+
+  <figure>
+    <div class="svg-scroll">
+    <svg viewBox="0 0 1000 620" role="img" aria-label="A sequence diagram: the user asks in English; the agent calls describe_ontology and receives objects, links with cardinality and metrics with grain; the agent composes the QuerySpec JSON itself, which no code in this repo does; it calls the query tool, which validates, resolves, analyses, compiles and executes; the server returns rows with provenance, or a typed refusal carrying alternatives, which the agent uses to repair the spec and call again.">
+      <defs>
+        <marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+        <marker id="ar4-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#2C7355"/>
+        </marker>
+        <marker id="ar4-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#A5322A"/>
+        </marker>
+        <marker id="ar4-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#B27A16"/>
+        </marker>
+      </defs>
+
+      <!-- lanes -->
+      <g font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor" text-anchor="middle">
+        <text x="110" y="22">you</text>
+        <text x="430" y="22">the agent</text>
+        <text x="810" y="22">grain MCP server</text>
+      </g>
+      <g font-family="IBM Plex Sans, sans-serif" font-size="10" fill="currentColor" opacity=".6" text-anchor="middle">
+        <text x="110" y="37">a terminal</text>
+        <text x="430" y="37">Claude — outside this repo</text>
+        <text x="810" y="37">server.py → api.py → postgres</text>
+      </g>
+      <line x1="20" y1="47" x2="980" y2="47" stroke="currentColor" stroke-width="1" opacity=".35"/>
+      <g stroke="currentColor" stroke-width="1" stroke-dasharray="4 5" opacity=".35">
+        <line x1="110" y1="52" x2="110" y2="584"/>
+        <line x1="430" y1="52" x2="430" y2="584"/>
+        <line x1="810" y1="52" x2="810" y2="584"/>
+      </g>
+
+      <!-- 1. the ask -->
+      <text x="270" y="76" font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor" text-anchor="middle">"top 5 countries by revenue"</text>
+      <line x1="112" y1="88" x2="426" y2="88" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <text x="270" y="104" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".68" text-anchor="middle">English. No schema, no column names, no SQL.</text>
+
+      <!-- 2. describe -->
+      <text x="620" y="136" font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor" text-anchor="middle">describe_ontology()</text>
+      <line x1="432" y1="148" x2="806" y2="148" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <rect x="660" y="160" width="300" height="46" fill="none" stroke="currentColor" stroke-width="1.3"/>
+      <text x="810" y="178" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" text-anchor="middle">Grain.load()</text>
+      <text x="810" y="195" font-family="IBM Plex Sans, sans-serif" font-size="10" fill="currentColor" opacity=".7" text-anchor="middle">reflect schema · verify declarations vs real keys</text>
+
+      <!-- 3. what comes back -->
+      <line x1="806" y1="226" x2="434" y2="226" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <text x="620" y="218" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" text-anchor="middle">objects · links + cardinality · metrics + grain + ai_context synonyms · the rules</text>
+      <text x="620" y="242" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".62" text-anchor="middle">no DDL, no column list, no row counts</text>
+
+      <!-- 4. compose, in the model -->
+      <text x="430" y="272" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="#B27A16" text-anchor="middle">this step is the model's own — no code in this repo does it</text>
+      <rect x="196" y="282" width="468" height="94" fill="none" stroke="#B27A16" stroke-width="1.6" stroke-dasharray="6 4"/>
+      <g font-family="JetBrains Mono, monospace" font-size="9.5" fill="currentColor">
+        <text x="210" y="302">{"object": "Customer",</text>
+        <text x="210" y="316"> "metrics": ["revenue"],</text>
+        <text x="210" y="330"> "traverse": [{"link": "Customer_Invoices"}, {"link": "Invoice_Lines"}],</text>
+        <text x="210" y="344"> "group_by": ["country"],</text>
+        <text x="210" y="358"> "order_by": [{"key": "revenue", "desc": true}], "limit": 5}</text>
+      </g>
+
+      <!-- 5. the call -->
+      <text x="620" y="402" font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor" text-anchor="middle">query(spec)</text>
+      <line x1="432" y1="414" x2="806" y2="414" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <text x="620" y="430" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".68" text-anchor="middle">or explain(spec) — SQL and verdicts, nothing run</text>
+
+      <rect x="630" y="440" width="360" height="52" fill="none" stroke="currentColor" stroke-width="1.3"/>
+      <text x="810" y="459" font-family="JetBrains Mono, monospace" font-size="10.5" fill="currentColor" text-anchor="middle">validate → resolve → analyse → compile → execute</text>
+      <text x="810" y="478" font-family="IBM Plex Sans, sans-serif" font-size="10" fill="currentColor" opacity=".7" text-anchor="middle">one guarded statement · 10 s timeout · row cap 10 000</text>
+
+      <!-- 6a. success -->
+      <line x1="806" y1="516" x2="434" y2="516" stroke="#2C7355" stroke-width="1.6" marker-end="url(#ar4-ok)"/>
+      <text x="620" y="510" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#2C7355" text-anchor="middle">rows · compiled_sql · rewrites · additive</text>
+
+      <!-- 6b. refusal + repair loop -->
+      <line x1="806" y1="552" x2="434" y2="552" stroke="#A5322A" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#ar4-bad)"/>
+      <text x="620" y="546" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#A5322A" text-anchor="middle">or a typed refusal, carrying alternatives</text>
+      <path d="M424,552 L180,552 L180,329 L192,329" fill="none" stroke="#A5322A" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#ar4-bad)"/>
+      <text x="172" y="440" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="#A5322A" text-anchor="end">repair the spec,</text>
+      <text x="172" y="454" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="#A5322A" text-anchor="end">call again</text>
+
+      <!-- 7. the answer -->
+      <line x1="426" y1="588" x2="114" y2="588" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar4)"/>
+      <text x="270" y="582" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" text-anchor="middle">prose, plus any caveat repeated verbatim</text>
+      <text x="270" y="606" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".62" text-anchor="middle">e.g. additive:false — “the groups overlap; this column will not sum”</text>
+    </svg>
+    </div>
+    <figcaption><b>The agent authors one thing: the spec.</b> Everything to the right of the middle
+    lifeline is this repo; the composing step in the dashed box is not. It is also the step nothing
+    here can test — see <span style="white-space:nowrap">§06</span>.</figcaption>
+  </figure>
+
+  <p>Three things follow from that division of labour.</p>
+  <p><b>The CLI is a peer, not a stage.</b> <code>grain query --spec '{…}'</code> takes the JSON
+  already written, parses it at <code>cli.py:51</code>, and calls the same <code>api.py</code>. It
+  does not go through the MCP server, and the MCP server does not go through it — the two adapters
+  converge on the library, never on each other.</p>
+  <p><b>Nothing constrains the agent at generation time.</b> Both MCP tools declare
+  <code>spec: dict</code>, so the published input schema is <code>{"type": "object",
+  "additionalProperties": true}</code> — the agent is not even schema-bound on field names, let
+  alone on which objects and metrics exist. <code>QuerySpec</code>'s own schema does close the
+  field set and enumerate the nine filter ops; it is simply never handed over. Every name stays a
+  bare <code>string</code> until <code>resolve</code> checks it against the ontology.</p>
+  <p><b>A refusal is a turn in a loop.</b> That is why every error carries
+  <code>alternatives</code>: <code>NonAdditiveRefused</code> names <code>group_by … id</code>,
+  <code>FanOutRefused</code> names the hop to add. The agent repairs and calls again — one more
+  round trip, not a dead end.</p>
+</section>
+
+<section>
+  <h2><span class="num">02</span>The whole path, at once</h2>
+  <p class="lede">The agent emits a <code>QuerySpec</code> and nothing else — no SQL, no Python.
+  Everything below happens inside <code>Grain.query()</code>, which is 12 lines long because every
+  decision has already been given somewhere to live.</p>
+
+  <figure>
+    <div class="svg-scroll">
+    <svg viewBox="0 0 1000 430" role="img" aria-label="A QuerySpec passes through validate, resolve, analyse, compile and execute to a Result; resolve, analyse and compile touch no database and are what explain() returns; each stage exits upward into its own typed refusal; the database is touched twice, once at load to reflect and verify declarations and once at execute to run a single guarded statement.">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+        <marker id="ar-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#A5322A"/>
+        </marker>
+        <marker id="ar-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#B27A16"/>
+        </marker>
+      </defs>
+
+      <!-- refusal exits -->
+      <g font-family="JetBrains Mono, monospace" font-size="10" fill="#A5322A">
+        <text x="208" y="30" text-anchor="middle">ValidationError</text>
+        <text x="208" y="44" text-anchor="middle">extra="forbid"</text>
+
+        <text x="348" y="18" text-anchor="middle">UnknownName</text>
+        <text x="348" y="32" text-anchor="middle">NoPath</text>
+        <text x="348" y="46" text-anchor="middle">GroupKeyNotOnPath</text>
+        <text x="348" y="60" text-anchor="middle">AmbiguousGroupKey</text>
+
+        <text x="488" y="18" text-anchor="middle">FanOutRefused</text>
+        <text x="488" y="32" text-anchor="middle">NonAdditiveRefused</text>
+        <text x="488" y="46" text-anchor="middle">KeyBeyondGrain</text>
+
+        <text x="628" y="30" text-anchor="middle">FanOutRefused</text>
+        <text x="628" y="44" text-anchor="middle">GrainError</text>
+
+        <text x="768" y="30" text-anchor="middle">GuardTripped</text>
+        <text x="768" y="44" text-anchor="middle">statement timeout</text>
+      </g>
+      <g stroke="#A5322A" stroke-width="1.2" marker-end="url(#ar-bad)" fill="none">
+        <line x1="208" y1="150" x2="208" y2="56"/>
+        <line x1="348" y1="150" x2="348" y2="72"/>
+        <line x1="488" y1="150" x2="488" y2="72"/>
+        <line x1="628" y1="150" x2="628" y2="56"/>
+        <line x1="768" y1="150" x2="768" y2="56"/>
+      </g>
+      <text x="8" y="44" font-family="JetBrains Mono, monospace" font-size="10" fill="#A5322A" letter-spacing="1">REFUSED, TYPED,</text>
+      <text x="8" y="58" font-family="JetBrains Mono, monospace" font-size="10" fill="#A5322A" letter-spacing="1">WITH ALTERNATIVES</text>
+
+      <!-- pipeline boxes -->
+      <g fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="8" y="150" width="120" height="62"/>
+        <rect x="148" y="150" width="120" height="62"/>
+        <rect x="288" y="150" width="120" height="62"/>
+        <rect x="428" y="150" width="120" height="62"/>
+        <rect x="568" y="150" width="120" height="62"/>
+        <rect x="708" y="150" width="120" height="62"/>
+      </g>
+      <rect x="848" y="150" width="144" height="62" fill="none" stroke="#B27A16" stroke-width="2"/>
+
+      <g font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor" text-anchor="middle">
+        <text x="68" y="176">adapter</text>
+        <text x="208" y="176">QuerySpec</text>
+        <text x="348" y="176">resolve</text>
+        <text x="488" y="176">analyse</text>
+        <text x="628" y="176">compile</text>
+        <text x="768" y="176">execute</text>
+        <text x="920" y="176" fill="#B27A16">Result</text>
+      </g>
+      <g font-family="IBM Plex Sans, sans-serif" font-size="10" fill="currentColor" opacity=".62" text-anchor="middle">
+        <text x="68" y="194">CLI · MCP · lib</text>
+        <text x="208" y="194">pydantic, strict</text>
+        <text x="348" y="194">names → elements</text>
+        <text x="488" y="194">grain verdicts</text>
+        <text x="628" y="194">SQLAlchemy Select</text>
+        <text x="768" y="194">guarded connection</text>
+        <text x="920" y="194">rows + provenance</text>
+      </g>
+
+      <g stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)" fill="none">
+        <line x1="128" y1="181" x2="146" y2="181"/>
+        <line x1="268" y1="181" x2="286" y2="181"/>
+        <line x1="408" y1="181" x2="426" y2="181"/>
+        <line x1="548" y1="181" x2="566" y2="181"/>
+        <line x1="688" y1="181" x2="706" y2="181"/>
+        <line x1="828" y1="181" x2="846" y2="181"/>
+      </g>
+
+      <!-- purity bracket -->
+      <g stroke="#B27A16" stroke-width="1.4" fill="none">
+        <path d="M288,238 L288,228 L688,228 L688,238"/>
+        <line x1="488" y1="228" x2="488" y2="240" stroke-dasharray="3 3"/>
+      </g>
+      <text x="488" y="256" font-family="JetBrains Mono, monospace" font-size="11" fill="#B27A16" text-anchor="middle">planning only — reads the ontology, never the data</text>
+      <text x="488" y="272" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".7" text-anchor="middle">explain() stops here and returns the SQL; the verdict cannot drift as rows are added</text>
+
+      <!-- database -->
+      <g fill="none" stroke="currentColor" stroke-width="1.4">
+        <path d="M700,336 a48,13 0 0 1 96,0 v46 a48,13 0 0 1 -96,0 z"/>
+        <path d="M700,336 a48,13 0 0 0 96,0"/>
+      </g>
+      <text x="748" y="372" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" text-anchor="middle">postgres</text>
+      <text x="748" y="404" font-family="IBM Plex Sans, sans-serif" font-size="10" fill="currentColor" opacity=".62" text-anchor="middle">read-only role</text>
+
+      <line x1="768" y1="212" x2="768" y2="322" stroke="#B27A16" stroke-width="1.6" marker-end="url(#ar-acc)"/>
+      <text x="784" y="248" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="#B27A16">1 statement</text>
+      <text x="784" y="262" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="#B27A16">READ COMMITTED</text>
+      <text x="784" y="276" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="#B27A16">timeout 10 s</text>
+      <text x="784" y="290" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="#B27A16">fetch cap + 1</text>
+
+      <rect x="8" y="336" width="152" height="46" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 3"/>
+      <text x="84" y="356" font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor" text-anchor="middle">Grain.load()</text>
+      <text x="84" y="372" font-family="IBM Plex Sans, sans-serif" font-size="10" fill="currentColor" opacity=".62" text-anchor="middle">once, at startup</text>
+      <line x1="162" y1="359" x2="694" y2="359" stroke="currentColor" stroke-width="1.2" stroke-dasharray="5 3" marker-end="url(#ar)"/>
+      <text x="428" y="350" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".75" text-anchor="middle">reflect the schema · verify every declaration against the real PKs and unique indexes</text>
+    </svg>
+    </div>
+    <figcaption><b>Two database touches, not five.</b> The ontology is checked against the
+    database once at load; the query is sent once at execute. Resolution, the grain decision and
+    compilation read declarations only — which is why <code>explain()</code> answers with no
+    connection at all, and why 190 of the 241 tests need no database.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="num">03</span>Stage by stage, with what kills it</h2>
+  <p class="lede">Each stage is given one job, one input type and one set of typed exits. The
+  “can die with” column is the interesting one: a refusal here always carries
+  <code>alternatives</code>, because an error that only says no costs the agent a turn and teaches
+  it nothing.</p>
+
+  <h3>Validate — <code>QuerySpec.model_validate</code> (spec.py)</h3>
+  <div class="stage">
+    <div class="cell"><h4>Reads</h4><ul>
+      <li>The agent's JSON, nothing else</li>
+      <li><code>ConfigDict(extra="forbid")</code> on every model</li>
+    </ul></div>
+    <div class="cell"><h4>Decides</h4><ul>
+      <li>Shape only: <code>object</code>, <code>filters</code>, <code>traverse</code>, <code>group_by</code>, <code>metrics</code>, <code>order_by</code>, <code>limit</code></li>
+      <li><code>op:"in"</code> needs a sequence; <code>op:"is_null"</code> takes no value</li>
+      <li><code>limit</code> defaults to 100, <code>None</code> means no LIMIT clause</li>
+    </ul></div>
+    <div class="cell dies"><h4>Can die with</h4><ul>
+      <li><code>ValidationError</code> — a misspelled field is rejected at the door rather than silently ignored</li>
+    </ul></div>
+  </div>
+
+  <h3>Resolve — <code>resolve()</code> (resolve.py)</h3>
+  <div class="stage">
+    <div class="cell"><h4>Reads</h4><ul>
+      <li>The ontology's objects, links, properties, metrics</li>
+      <li>No database, no rows</li>
+    </ul></div>
+    <div class="cell"><h4>Decides</h4><ul>
+      <li>Walks <code>traverse</code> into a path of <code>Edge</code>s, checking each link departs from the object it lands on</li>
+      <li>Binds each group key to a <em>position</em>: <code>None</code> for the root, <code>i</code> for the object hop <code>i</code> lands on</li>
+      <li>Dotted filters resolve to one hop and become <code>EXISTS</code> — they change the population, not the row</li>
+      <li>De-duplicates keys and metrics; validates every <code>order_by</code> key is actually emitted</li>
+    </ul></div>
+    <div class="cell dies"><h4>Can die with</h4><ul>
+      <li><code>UnknownName</code> — with <code>difflib</code> suggestions</li>
+      <li><code>NoPath</code> — link does not start here</li>
+      <li><code>GroupKeyNotOnPath</code> — qualified by a link you did not traverse</li>
+      <li><code>AmbiguousGroupKey</code> — that link appears twice on the path</li>
+    </ul></div>
+  </div>
+
+  <h3>Analyse — <code>analyse()</code> (grain.py)</h3>
+  <div class="stage">
+    <div class="cell"><h4>Reads</h4><ul>
+      <li>Declared <code>cardinality</code> on each edge</li>
+      <li>Each metric's declared <code>grain</code> table</li>
+      <li>Whether a group key is declared <code>unique</code></li>
+    </ul></div>
+    <div class="cell"><h4>Decides</h4><ul>
+      <li><code>path_to_table</code>: the shortest prefix that brings the grain into scope</li>
+      <li>Fanning edges <em>downstream</em> of the grain force <code>aggregate_then_join</code>; edges upstream are harmless</li>
+      <li>A fanning edge pinned by a <code>unique</code> key at its own position stays inline — its copies land in different groups</li>
+      <li><code>additive</code>: false when any edge in the prefix is effectively <code>many_to_many</code></li>
+      <li><code>subquery_edges</code>: how far a pre-aggregate must walk to carry every key</li>
+    </ul></div>
+    <div class="cell dies"><h4>Can die with</h4><ul>
+      <li><code>FanOutRefused</code> — grain not on the path; names the hop to add</li>
+      <li><code>NonAdditiveRefused</code> — non-additive without a key that identifies one row</li>
+      <li><code>KeyBeyondGrain</code> — the key can only be reached across a fanning edge</li>
+    </ul></div>
+  </div>
+
+  <h3>Compile — <code>compile_query()</code> (compile.py)</h3>
+  <div class="stage">
+    <div class="cell"><h4>Reads</h4><ul>
+      <li>The resolved query, the plan, the reflected <code>MetaData</code></li>
+    </ul></div>
+    <div class="cell"><h4>Decides</h4><ul>
+      <li><code>Scope</code> holds one FROM element per position, aliasing a table only when that name is already in scope (<code>employee_hop1</code>)</li>
+      <li>FROM first, columns second — a qualified key cannot resolve before its hop is applied</li>
+      <li>A recursive link becomes a depth-bounded <code>WITH RECURSIVE</code> ancestor walk carrying <code>__grain_start</code></li>
+      <li>Rewritten metrics become a correlate-free subquery <code>LEFT JOIN</code>ed back on the keys, never <code>coalesce(...,0)</code></li>
+      <li>Same spec in, byte-identical SQL out — nothing here reads data or the clock</li>
+    </ul></div>
+    <div class="cell dies"><h4>Can die with</h4><ul>
+      <li><code>FanOutRefused</code> — only rewritten metrics and no key to rejoin them on</li>
+      <li><code>GrainError</code> — a query that asks for neither a key nor a metric</li>
+    </ul></div>
+  </div>
+
+  <h3>Execute — <code>execute()</code> + <code>guarded_connection()</code> (execute.py, guard.py)</h3>
+  <div class="stage">
+    <div class="cell"><h4>Reads</h4><ul>
+      <li>The compiled <code>Select</code>, the <code>GuardConfig</code></li>
+      <li>The database — for the first time since load</li>
+    </ul></div>
+    <div class="cell"><h4>Decides</h4><ul>
+      <li>Pins <code>READ COMMITTED</code>, then <code>begin()</code> explicitly, so <code>SET LOCAL statement_timeout</code> has a transaction to bind to</li>
+      <li>Fetches <code>row_cap + 1</code> rows, so “complete” and “truncated at exactly the cap” stay distinguishable</li>
+      <li>Always <code>rollback()</code> — the connection is read-only by construction</li>
+      <li>Column labels come off <code>cursor.keys()</code>, not from the caller's metric order</li>
+    </ul></div>
+    <div class="cell dies"><h4>Can die with</h4><ul>
+      <li><code>GuardTripped("row_cap", 10000)</code></li>
+      <li>Postgres cancelling the statement at 10 s</li>
+    </ul></div>
+  </div>
+
+  <div class="callout">
+    <p><b>What comes back.</b> <code>Result</code> carries <code>rows</code> and
+    <code>columns</code>, plus the four things that make the answer auditable:
+    <code>compiled_sql</code> (the exact statement that ran), <code>rewrites</code> (what the
+    engine changed and which edge forced it), <code>additive</code> with
+    <code>non_additive_reason</code>, and <code>limit_reached</code>. A metric that matched no
+    group comes back <code>None</code>, never <code>0</code>.</p>
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">04</span>The one decision the database cannot make</h2>
+  <p class="lede">Everything above is plumbing around this: where a metric's grain sits relative
+  to the fanning edges on the path. Same two hops, two metrics, two different verdicts — decided
+  from declared cardinality alone.</p>
+
+  <figure>
+    <div class="svg-scroll">
+    <svg viewBox="0 0 1000 340" role="img" aria-label="On the path Customer to Invoice to InvoiceLine, the metric invoice_total has grain invoice with one fanning edge downstream, so it is rewritten as an aggregate-then-join; revenue has grain invoice_line with nothing downstream, so it is computed inline.">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+
+      <!-- the path -->
+      <g fill="none" stroke="currentColor" stroke-width="1.4">
+        <rect x="40" y="60" width="150" height="52"/>
+        <rect x="425" y="60" width="150" height="52"/>
+        <rect x="810" y="60" width="150" height="52"/>
+      </g>
+      <g font-family="JetBrains Mono, monospace" font-size="12.5" fill="currentColor" text-anchor="middle">
+        <text x="115" y="83">Customer</text>
+        <text x="500" y="83">Invoice</text>
+        <text x="885" y="83">InvoiceLine</text>
+      </g>
+      <g font-family="IBM Plex Sans, sans-serif" font-size="10" fill="currentColor" opacity=".62" text-anchor="middle">
+        <text x="115" y="100">59 rows</text>
+        <text x="500" y="100">412 rows</text>
+        <text x="885" y="100">2 240 rows</text>
+      </g>
+      <g stroke="currentColor" stroke-width="1.4" marker-end="url(#ar2)" fill="none">
+        <line x1="190" y1="86" x2="423" y2="86"/>
+        <line x1="575" y1="86" x2="808" y2="86"/>
+      </g>
+      <g font-family="JetBrains Mono, monospace" font-size="10.5" fill="currentColor" text-anchor="middle">
+        <text x="306" y="76">Customer_Invoices</text>
+        <text x="692" y="76">Invoice_Lines</text>
+      </g>
+      <g font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".72" text-anchor="middle">
+        <text x="306" y="106">one_to_many · fans</text>
+        <text x="692" y="106">one_to_many · fans</text>
+      </g>
+
+      <!-- metric 1: invoice_total -->
+      <rect x="425" y="150" width="535" height="66" fill="#F6E9CC" stroke="#D9A94A" stroke-width="1.2" opacity=".45"/>
+      <circle cx="500" cy="140" r="5" fill="#B27A16"/>
+      <text x="512" y="144" font-family="JetBrains Mono, monospace" font-size="11.5" fill="#B27A16">grain: invoice</text>
+      <text x="440" y="174" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor">invoice_total = sum(invoice.total)</text>
+      <text x="440" y="192" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor">One fanning edge downstream of the grain replicates its rows 412 → 2 240.</text>
+      <text x="440" y="208" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="#B27A16">→ aggregate_then_join, forced_by Invoice_Lines. Summed inline it returns 20 848.62 for a truth of 2 328.60.</text>
+
+      <!-- metric 2: revenue -->
+      <rect x="810" y="248" width="150" height="66" fill="#DDEDE5" stroke="#2C7355" stroke-width="1.2" opacity=".5"/>
+      <circle cx="885" cy="238" r="5" fill="#2C7355"/>
+      <text x="800" y="242" font-family="JetBrains Mono, monospace" font-size="11.5" fill="#2C7355" text-anchor="end">grain: invoice_line</text>
+      <text x="40" y="272" font-family="JetBrains Mono, monospace" font-size="12" fill="currentColor">revenue = sum(invoice_line.unit_price * invoice_line.quantity)</text>
+      <text x="40" y="290" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor">Nothing downstream of the grain, so no row of it is ever replicated.</text>
+      <text x="40" y="306" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="#2C7355">→ inline. Sums to 2 328.60 across 24 countries.</text>
+    </svg>
+    </div>
+    <figcaption><b>The verdict is positional.</b> Only the shaded span — edges reached
+    <em>after</em> the metric's grain enters scope — can replicate that metric's rows. Edges before
+    it replicate the grain's ancestors, which leaves its own rows intact.</figcaption>
+  </figure>
+
+  <p>The rewrite computes the metric at its own grain in a correlate-free subquery and joins the
+  answer back on the group keys. The outer query keeps the fanned rows — the caller asked to
+  traverse there — but the metric no longer sees them.</p>
+
+  <figure>
+    <div class="svg-scroll">
+    <svg viewBox="0 0 1000 300" role="img" aria-label="The aggregate-then-join shape: a subquery groups customer joined to invoice by country into 24 rows totalling 2328.60, which is left-joined back onto the fanned outer query of 2240 rows on country, so the outer total stays 2328.60 instead of the naive 20848.62.">
+      <defs>
+        <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+      </defs>
+
+      <text x="20" y="28" font-family="JetBrains Mono, monospace" font-size="10.5" fill="currentColor" opacity=".65" letter-spacing="1">OUTER QUERY — THE FULL TRAVERSAL</text>
+      <rect x="20" y="40" width="600" height="58" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="36" y="64" font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor">customer ⋈ invoice ⋈ invoice_line</text>
+      <text x="36" y="84" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity=".75">2 240 rows — every invoice row replicated once per line</text>
+
+      <text x="20" y="150" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#B27A16" letter-spacing="1">SUBQUERY — WALKS ONLY subquery_edges = 1</text>
+      <rect x="20" y="162" width="600" height="76" fill="none" stroke="#B27A16" stroke-width="1.8"/>
+      <text x="36" y="186" font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor">SELECT customer.country, sum(invoice.total)</text>
+      <text x="36" y="204" font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor">FROM customer ⋈ invoice GROUP BY customer.country</text>
+      <text x="36" y="226" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="#B27A16">24 rows · 2 328.60 · correlate(None), so it runs once, not per outer row</text>
+
+      <line x1="320" y1="160" x2="320" y2="100" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <text x="332" y="126" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor">LEFT JOIN ON country IS NOT DISTINCT FROM country</text>
+
+      <line x1="620" y1="69" x2="700" y2="69" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar3)"/>
+      <rect x="700" y="40" width="280" height="198" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      <text x="716" y="64" font-family="JetBrains Mono, monospace" font-size="11" fill="currentColor" opacity=".65" letter-spacing="1">RESULT</text>
+      <g font-family="JetBrains Mono, monospace" font-size="11.5" fill="currentColor">
+        <text x="716" y="90">USA          523.06</text>
+        <text x="716" y="110">Canada       303.96</text>
+        <text x="716" y="130">France       195.10</text>
+        <text x="716" y="150">…  24 groups</text>
+      </g>
+      <line x1="716" y1="164" x2="964" y2="164" stroke="currentColor" stroke-width="1" opacity=".4"/>
+      <text x="716" y="186" font-family="JetBrains Mono, monospace" font-size="11.5" fill="#2C7355">total      2 328.60  ✓</text>
+      <text x="716" y="208" font-family="JetBrains Mono, monospace" font-size="11.5" fill="#A5322A">inline    20 848.62  ✗</text>
+      <text x="716" y="228" font-family="IBM Plex Sans, sans-serif" font-size="10.5" fill="currentColor" opacity=".7">8.95× overstated, no error raised</text>
+
+      <text x="20" y="276" font-family="IBM Plex Sans, sans-serif" font-size="11" fill="currentColor" opacity=".75">The joined value is taken straight — no coalesce(…, 0). The outer key set is provably a subset of the subquery's, so a NULL there is a broken comparison, not an empty group.</text>
+    </svg>
+    </div>
+    <figcaption><b>Measured, not illustrative.</b> Both figures for this query were run live:
+    the rewrite returns 24 groups summing to 2 328.60 and reports
+    <code>forced_by: Invoice_Lines</code>; the same join summed inline gives 20 848.62.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2><span class="num">05</span>Seven specs, traced live</h2>
+  <p class="lede">Every row below came from running the pipeline stage by stage against the loaded
+  Chinook database, printing the resolved path, the plan verdicts, the compiled SQL and the rows.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>Spec</th><th>Path walked</th><th class="mono">strategy</th><th class="mono">additive</th><th>Outcome</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="mono">Customer / country<br>invoice_total</td>
+        <td class="mono">Customer_Invoices</td>
+        <td><span class="tag good">inline</span></td>
+        <td class="mono">true</td>
+        <td>Grain in scope, nothing downstream fans. Plain <code>GROUP BY</code>.</td>
+      </tr>
+      <tr>
+        <td class="mono">Customer / country<br>invoice_total</td>
+        <td class="mono">Customer_Invoices → Invoice_Lines</td>
+        <td><span class="tag warn">aggregate_then_join</span></td>
+        <td class="mono">true</td>
+        <td><code>forced_by: Invoice_Lines</code>. 24 groups, 2 328.60.</td>
+      </tr>
+      <tr>
+        <td class="mono">Playlist / id, name<br>revenue</td>
+        <td class="mono">Playlist_Tracks → Track_InvoiceLines</td>
+        <td><span class="tag good">inline</span></td>
+        <td class="mono">false</td>
+        <td>Groups overlap across a <code>many_to_many</code>. Playlists 1 and 8 both 2 107.71; 12 groups sum to 5 738.28 against a truth of 2 328.60, and the flag says so.</td>
+      </tr>
+      <tr>
+        <td class="mono">Playlist / name<br>revenue</td>
+        <td class="mono">Playlist_Tracks → Track_InvoiceLines</td>
+        <td colspan="2"><span class="tag stop">NonAdditiveRefused</span></td>
+        <td>Two playlists are named <code>Music</code>, so a group is not one playlist. Alternative offered: <code>group_by … id</code>.</td>
+      </tr>
+      <tr>
+        <td class="mono">Customer / country<br>revenue</td>
+        <td class="mono">— none —</td>
+        <td colspan="2"><span class="tag stop">FanOutRefused</span></td>
+        <td>Grain <code>invoice_line</code> is not reachable. Repairs named: add the <code>Customer_Invoices</code> hop, or query <code>InvoiceLine</code>.</td>
+      </tr>
+      <tr>
+        <td class="mono">Employee / Employee_Manager.id,<br>Employee_Manager.last_name<br>employee_count</td>
+        <td class="mono">Employee_Manager (recursive, depth 10)</td>
+        <td><span class="tag good">inline</span></td>
+        <td class="mono">false</td>
+        <td><code>WITH RECURSIVE</code> ancestor walk with cycle guard. (1, Adams, 7), (2, Edwards, 3), (6, Mitchell, 2) — checked against hand-written SQL.</td>
+      </tr>
+      <tr>
+        <td class="mono">Album / title<br>filter Album_Tracks.genre = Jazz</td>
+        <td class="mono">— none; filter compiles to EXISTS —</td>
+        <td>—</td>
+        <td class="mono">true</td>
+        <td>13 albums, not 347. The <code>genre</code> object join is applied <em>inside</em> the <code>EXISTS</code>, which is the fix for defect C3.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="pre-label">Trace of the rewrite case, as printed</p>
+  <pre><code>[resolve] root=Customer path=['Customer_Invoices', 'Invoice_Lines']
+          keys=[('country', None, False)] metrics=['invoice_total']
+          tables_in_scope=['customer', 'invoice', 'invoice_line']
+[analyse] invoice_total: grain=invoice strategy=aggregate_then_join
+          forced_by=Invoice_Lines additive=True subquery_edges=1
+[compile] SELECT customer.country AS country,
+                 invoice_total_at_invoice.invoice_total AS invoice_total
+          FROM customer
+          JOIN invoice ON customer.customer_id = invoice.customer_id
+          JOIN invoice_line ON invoice.invoice_id = invoice_line.invoice_id
+          LEFT OUTER JOIN (SELECT customer.country AS country,
+                                  sum(invoice.total) AS invoice_total
+                           FROM customer
+                           JOIN invoice ON customer.customer_id = invoice.customer_id
+                           GROUP BY customer.country) AS invoice_total_at_invoice
+            ON customer.country IS NOT DISTINCT FROM invoice_total_at_invoice.country
+          GROUP BY customer.country, invoice_total_at_invoice.invoice_total
+[execute] 24 rows · sum 2328.60 · limit_reached=False</code></pre>
+
+  <p class="pre-label">The refusal, in full — this is what the agent reads</p>
+  <pre><code>NonAdditiveRefused: Metric 'revenue' is reached through 'Playlist_Tracks',
+which is many_to_many, so one 'invoice_line' row belongs to more than one group.
+The group_by keys (name) do not identify one row of the object they name, so two
+rows sharing a value merge into one group and everything reachable from both is
+counted twice inside it.
+Alternatives: group_by a property that identifies one row: id.</code></pre>
+</section>
+
+<section>
+  <h2><span class="num">06</span>Is it testable? It already is</h2>
+  <p class="lede">Yes — and the pipeline's shape is what makes it cheap. Because resolve, analyse
+  and compile read declarations only, most of the engine is testable as a pure function from spec
+  to SQL string. Both runs below are from this working tree, today.</p>
+
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Command</th><th class="mono">passed</th><th class="mono">skipped</th><th>Wall clock</th><th>What it proves</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="mono">uv run pytest -q<br><span style="opacity:.65">with GRAIN_DATABASE_URL</span></td>
+        <td class="num">241</td><td class="num">0</td><td class="num">3.06 s</td>
+        <td>Full stack, including every measured anchor against live Chinook.</td>
+      </tr>
+      <tr>
+        <td class="mono">env -u GRAIN_DATABASE_URL<br>uv run pytest -q</td>
+        <td class="num">190</td><td class="num">51</td><td class="num">0.39 s</td>
+        <td>The planning half alone. A green run here is <em>not</em> a green build — check the skip count.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout stop">
+    <p><b>The trap this repo already walked into.</b> Integration tests skip silently without
+    <code>GRAIN_DATABASE_URL</code>, so <code>241 passed</code> and <code>190 passed, 51
+    skipped</code> both print green. The second one has tested no SQL against a database at all.
+    Two CLI tests used to <em>fail</em> rather than skip in that state (defect I5).</p>
+  </div>
+
+  <h3>How each stage is tested</h3>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Stage</th><th>Needs a database?</th><th>Test files</th><th class="mono">tests</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">load</td><td>Yes — declarations are checked against real keys</td><td class="mono">test_loader · test_loader_declarations · test_ontology_types</td><td class="num">36</td></tr>
+      <tr><td class="mono">validate</td><td>No</td><td class="mono">test_spec</td><td class="num">11</td></tr>
+      <tr><td class="mono">resolve</td><td>No</td><td class="mono">test_resolve · test_qualified_keys</td><td class="num">27</td></tr>
+      <tr><td class="mono">analyse</td><td>No</td><td class="mono">test_grain · test_grain_additivity · test_errors</td><td class="num">27</td></tr>
+      <tr><td class="mono">compile</td><td>No — asserts the SQL string</td><td class="mono">test_compile_basic · _metrics · _through · _recursive · _spanned_filters</td><td class="num">46</td></tr>
+      <tr><td class="mono">describe</td><td>No</td><td class="mono">test_describe</td><td class="num">14</td></tr>
+      <tr><td class="mono">execute + guard</td><td>Yes</td><td class="mono">test_guard · test_guard_enforcement · test_database</td><td class="num">5</td></tr>
+      <tr><td class="mono">whole facade</td><td>Yes — anchored on measured numbers</td><td class="mono">test_measured_anchors · test_defect_anchors · test_hierarchy_anchors · test_api · test_recursive · test_cli</td><td class="num">41</td></tr>
+      <tr><td class="mono">the shipped pack</td><td>Yes</td><td class="mono">test_chinook_ontology</td><td class="num">6</td></tr>
+      <tr><td class="mono">architecture</td><td>No — AST walk over <code>engine/</code></td><td class="mono">test_boundary</td><td class="num">28</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Three test styles doing different work</h3>
+  <p><b>Measured anchors.</b> <code>test_revenue_at_line_grain_is_2328_60</code> and
+  <code>test_the_inflated_figure_is_unreachable</code> assert numbers, not statements. Four of the
+  five critical defects produced correct-<em>looking</em> SQL, so a test that inspects a statement
+  would have passed on all of them.</p>
+  <p><b>Defect anchors.</b> One test per fixed defect, each asserting the number the defect got
+  wrong — 13 Jazz albums not 347, playlists 1 and 8 separated at 2 107.71 each, the top countries
+  by revenue actually being the top countries.</p>
+  <p><b>The architecture test.</b> <code>test_boundary</code> parses every file under
+  <code>engine/</code> and fails if one imports a domain, in any import form — the second-domain
+  claim, enforced continuously rather than checked once.</p>
+
+  <h3>Reproducing the traces on this page</h3>
+  <pre><code>set -a &amp;&amp; . ./.env &amp;&amp; set +a          # GRAIN_DATABASE_URL
+
+# every stage, printed, for one spec
+uv run python - &lt;&lt;'PY'
+import os
+from sqlalchemy import create_engine
+from grain.engine.api import Grain
+from grain.engine.spec import QuerySpec, Hop
+from grain.engine.resolve import resolve
+from grain.engine.grain import analyse
+from grain.engine.compile import compile_query, sql_text
+from grain.domains.chinook import CHINOOK_DIR
+
+g = Grain.load(CHINOOK_DIR, create_engine(os.environ["GRAIN_DATABASE_URL"], future=True))
+spec = QuerySpec(object="Customer", group_by=["country"], metrics=["invoice_total"],
+                 traverse=[Hop(link="Customer_Invoices"), Hop(link="Invoice_Lines")], limit=None)
+
+rq = resolve(spec, g.ontology)
+plan = analyse(rq)
+print([e.link.name for e in rq.path])
+print([(mp.metric.name, mp.strategy, mp.forced_by, mp.subquery_edges) for mp in plan.metric_plans])
+print(sql_text(compile_query(rq, plan, g.metadata)))
+r = g.query(spec)
+print(len(r.rows), sum(x[1] for x in r.rows), r.additive, r.limit_reached)
+PY
+
+# or without writing Python at all. load() reflects the schema; explain() then
+# compiles and reports the verdicts without running anything.
+uv run grain explain --spec '{"object":"Customer","group_by":["country"],
+  "metrics":["invoice_total"],"traverse":[{"link":"Invoice_Lines"}]}'</code></pre>
+
+  <h3>What is not testable yet</h3>
+  <p>Two things, and they are the project's actual claims rather than details:</p>
+  <p><b>The comparison that would justify the engine has no test to run.</b> There is no golden
+  question set and no ablation against raw text-to-SQL, so “an agent with grain is more correct
+  than an agent with a schema dump” is unmeasured. That needs a fixed set of questions with known
+  answers — a harness this repo does not have, not a test it is missing.</p>
+  <p><b>Portability is asserted by one AST test and one domain.</b> <code>test_boundary</code>
+  proves <code>engine/</code> imports no domain; it cannot prove a genuinely different database
+  needs no engine change. Only a second domain pack does that.</p>
+</section>
+
+<footer>
+  Traced against Chinook v1.4.5 on PostgreSQL 17 · <code>241 passed in 3.06s</code> ·
+  companion to <code>docs/architecture.html</code>, which covers the design; this page covers the
+  execution.
+</footer>
+</div>
