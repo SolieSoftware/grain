@@ -12,7 +12,9 @@ ValueType = Literal["string", "integer", "decimal", "boolean", "date", "datetime
 
 FANNING: frozenset[str] = frozenset({"one_to_many", "many_to_many"})
 
-AggFunc = Literal["sum", "count", "count_distinct", "min", "max", "avg"]
+AggFunc = Literal[
+    "sum", "count", "count_distinct", "min", "max", "avg", "median", "percentile"
+]
 
 QuantityKind = Literal["extensive", "rate", "ratio"]
 
@@ -252,6 +254,10 @@ class Metric(BaseModel):
     expr: str | None = None
     agg: AggFunc | None = None
     value: str | None = None
+    percentile: float | None = None
+    """The p of `agg: percentile`, in [0, 1]. Meaningless on any other
+    aggregate and refused there -- a field that quietly does nothing is worse
+    than no field."""
     description: str | None = None
     ai_context: AiContext | None = None
 
@@ -263,6 +269,27 @@ class Metric(BaseModel):
             raise ValueError(
                 f"metric '{self.name}' must declare exactly one of 'expr' or "
                 f"'agg' + 'value' (both of that pair, together)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_percentile(self) -> "Metric":
+        if self.agg == "percentile":
+            if self.percentile is None:
+                raise ValueError(
+                    f"metric '{self.name}' uses agg 'percentile' but sets no "
+                    f"'percentile' value. A percentile with no p has no meaning."
+                )
+            if not 0.0 <= self.percentile <= 1.0:
+                raise ValueError(
+                    f"metric '{self.name}' has percentile {self.percentile}, "
+                    f"which is outside [0, 1]."
+                )
+        elif self.percentile is not None:
+            raise ValueError(
+                f"metric '{self.name}' sets 'percentile' but its agg is "
+                f"'{self.agg}', where p has no meaning. Remove it, or use "
+                f"agg: percentile."
             )
         return self
 
@@ -278,6 +305,13 @@ class Metric(BaseModel):
             return self.expr
         if self.agg == "count_distinct":
             return f"count(distinct {self.value})"
+        if self.agg in ("median", "percentile"):
+            # `percentile_disc` returns a value that actually OCCURS in the
+            # data. `percentile_cont` would interpolate between the two middle
+            # values of an even-sized set, returning a number that may appear
+            # nowhere -- a deliberate non-goal.
+            p = 0.5 if self.agg == "median" else self.percentile
+            return f"percentile_disc({p}) within group (order by {self.value})"
         return f"{self.agg}({self.value})"
 
     @property
