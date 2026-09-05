@@ -71,3 +71,57 @@ def test_an_opaque_expr_metric_is_unaffected():
                expr="percentile_disc(0.5) within group (order by track.milliseconds)")
     assert m.percentile is None
     assert m.is_structured is False
+
+
+# -- scale, read from the database rather than the ontology -------------------
+
+def test_an_integer_column_has_scale_zero(lite_metadata):
+    from grain.engine_symmetric.scale import column_scale
+
+    assert column_scale(lite_metadata.tables["track"].columns["milliseconds"]) == 0
+
+
+def test_a_numeric_column_reports_its_declared_scale(lite_metadata):
+    """Reflection carries it. Multiplying by 10^scale clears the fraction
+    exactly, with nothing to round — which is the difference from Looker, which
+    FLOOR-scales to a guessed precision of 6 and therefore must truncate."""
+    from sqlalchemy import Column, MetaData, Numeric, Table
+
+    from grain.engine_symmetric.scale import column_scale
+
+    md = MetaData()
+    t = Table("n", md, Column("x", Numeric(10, 2)))
+    assert column_scale(t.columns["x"]) == 2
+
+
+@pytest.mark.parametrize("col", ["name"])
+def test_a_non_numeric_column_has_no_scale(col, lite_metadata):
+    from grain.engine_symmetric.scale import column_scale
+
+    assert column_scale(lite_metadata.tables["track"].columns[col]) is None
+
+
+def test_a_float_column_has_no_scale():
+    """Binary floating point has no exact decimal scale, so it cannot be
+    encoded without rounding. Caught here rather than by naming float in a list,
+    because ValueType has no float member — a double precision column would be
+    DECLARED decimal, and trusting the declaration would admit it."""
+    from sqlalchemy import Column, Float, MetaData, Table
+
+    from grain.engine_symmetric.scale import column_scale
+
+    md = MetaData()
+    t = Table("f", md, Column("x", Float))
+    assert column_scale(t.columns["x"]) is None
+
+
+def test_an_unconstrained_numeric_has_no_scale():
+    """`numeric` with no precision holds arbitrary scale, so no fixed power of
+    ten clears the fraction."""
+    from sqlalchemy import Column, MetaData, Numeric, Table
+
+    from grain.engine_symmetric.scale import column_scale
+
+    md = MetaData()
+    t = Table("n2", md, Column("x", Numeric))
+    assert column_scale(t.columns["x"]) is None
