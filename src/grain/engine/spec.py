@@ -2,7 +2,7 @@
 declares, so an invalid request is unrepresentable rather than merely rejected."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -11,11 +11,23 @@ FilterOp = Literal["eq", "ne", "gt", "gte", "lt", "lte", "in", "like", "is_null"
 STRICT = ConfigDict(extra="forbid")
 
 
+# What a filter can be compared against. Spelled out rather than `Any` because
+# this model's JSON Schema is handed to the agent as a tool definition, and a
+# schema node with no `type` is rejected outright:
+#   tools.0.custom: Invalid schema: Schema type is missing for schema:
+#   {'default': None, 'title': 'Value'}
+# `Any` emits exactly that. The union is not a narrowing — every value `Any`
+# accepted still round-trips with its type intact — it just says so in a form
+# the schema can carry. `list` is spelled with typed members for the same
+# reason: `list[Any]` emits `items: {}`, which has no type either.
+FilterScalar = str | int | float | bool
+
+
 class Filter(BaseModel):
     model_config = STRICT
     property: str
     op: FilterOp
-    value: Any = None
+    value: FilterScalar | list[FilterScalar] | None = None
 
     @model_validator(mode="after")
     def _check_value_matches_op(self) -> "Filter":
