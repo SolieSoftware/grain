@@ -61,6 +61,14 @@ loaded ontology*.
 - **`symmetric`** — one pass, `SUM(DISTINCT k*K + v) - SUM(DISTINCT k*K)`.
   `src/grain/engine_symmetric/`.
 
+**The symmetric engine carries TWO encodings, and their guarantees differ.** The
+sum encoding pairs `K = 1e30` with `BOUND = 5e29` — a limit on a VALUE, which
+nothing in the schema constrains, so it is only a load-time check and later
+writes can violate it silently. The array encoding used for `median` and
+`percentile` uses `KEY_OFFSET = 1e19`, which bounds a KEY: a bigint cannot
+exceed 9.22e18, so the key's own type guarantees it. A proof, not a measurement.
+Do not conflate the two when reasoning about drift.
+
 `src/grain/plan.py` is the seam. `EnginePlan` is the entire contract; the facade
 must never touch an engine's own types.
 

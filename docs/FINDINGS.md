@@ -85,6 +85,57 @@ disagreement you cannot dismiss is the only cheap way to find a bug that has
 been correct-looking for months. Build the second one differently enough that it
 *can* disagree.
 
+*Fixed with an `EXISTS` semi-join — see "One decision, two effects" below for
+what the bug itself turned out to be about.*
+
+### One decision, two effects, and only one of them was reasoned about
+
+The pre-aggregate skipped the downstream edges for a documented reason:
+**walking them would replicate the grain's rows**. That reasoning is correct and
+was carefully written down.
+
+Skipping an edge does two things, though. It avoids replicating — the effect
+that was reasoned about — and it avoids **filtering**, which was not mentioned
+anywhere, in code or comments. The join is an inner join; not walking it silently
+widens the population.
+
+The fix keeps both effects apart: an `EXISTS` semi-join filters without
+multiplying, so the property being protected survives untouched while the one
+that was overlooked is restored.
+
+**Transferable:** when a comment explains why something is skipped, check what
+*else* skipping it does. A rationale that names one consequence tends to stop
+the reader looking for a second, which is what let this survive for months in a
+codebase dense with careful comments.
+
+### A test that names a proxy will fail when the proxy stops holding
+
+Two tests asserted "the downstream table does not appear in the subquery". The
+property they meant was "is not JOINED, so nothing replicates". Once the table
+started appearing inside an `EXISTS` — filtering, not multiplying — the proxy
+broke while the guarantee held perfectly.
+
+They were right to fail: a proxy failing is the moment you find out it was a
+proxy. But the fix is to assert the real property, not to relax the test.
+
+**Transferable:** when a test breaks on a change you believe is correct, work
+out whether it was asserting the property or a stand-in for it. Relaxing a
+genuine guarantee and tightening a broken proxy look identical in a diff.
+
+### The first fix did nothing, silently
+
+The `EXISTS` was built by reusing the departure table un-aliased, which put a
+second `track` in the subquery's `FROM`. `correlate()` cannot remove what
+`select_from` put there, so the clause compiled, ran, and asked *"does any sold
+track exist"* — true for every row. It filtered nothing and raised nothing.
+
+Caught only because the test compared numbers against hand-written SQL. A test
+asserting "an EXISTS is present" would have passed.
+
+**Transferable:** for anything correlated — subqueries, semi-joins, window
+partitions — assert the *answer*, never the shape. An uncorrelated correlated
+subquery is valid SQL with a constant result, and it looks right in a plan.
+
 ## Modelling
 
 ### Validating the grain of a metric says nothing about whether the quantity is additive
@@ -214,6 +265,21 @@ it was **acceptable**. Two different claims; only one was being made.
 **Transferable:** a test that checks provenance is not checking validity. If a
 component's contract is enforced by a system you cannot run locally, the tests
 that matter are the ones that assert what that system requires.
+
+### A design goal can be met by the thing it was aiming past
+
+Order statistics were built into the symmetric engine because that was the one
+place the default engine was strictly more capable. The work landed in both
+engines — the subquery engine needed nothing but the taxonomy entry, since
+pre-aggregating at the grain already leaves `percentile_disc` looking at
+distinct rows.
+
+That second, almost-free implementation is what found the pre-aggregate bug. The
+capability was the goal; the verification was the by-product, and the by-product
+was worth more.
+
+**Transferable:** where a second implementation is nearly free, take it even if
+the first already works. Its value is not the feature.
 
 ### The elegant invariant was not the load-bearing one
 

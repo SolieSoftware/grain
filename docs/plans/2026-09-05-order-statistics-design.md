@@ -1,6 +1,6 @@
 # Order Statistics in the Symmetric Engine — Design
 
-**Status:** design 2026-09-05, not yet implemented.
+**Status:** implemented 2026-09-05. See `docs/plans/2026-09-05-order-statistics-plan.md`.
 
 **Goal:** Let the symmetric engine answer `median` and `percentile(p)` over a
 fanning join, correctly, in one pass. This closes the only case where the

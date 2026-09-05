@@ -272,6 +272,7 @@ they keep a fanned join from double-counting.
 |---|---|---|
 | Method | pre-aggregate the metric at its own grain, `LEFT JOIN` it back | one pass, `SUM(DISTINCT k*K + v) - SUM(DISTINCT k*K)` |
 | Metric forms | `expr` and `agg`/`value` | `agg`/`value` only |
+| Order statistics over a fan | `percentile_disc` after pre-aggregating | encoded array, one pass |
 | Key beyond the grain | refused (`KeyBeyondGrain`) | answered |
 | Non-unique group key over many-to-many | refused (`NonAdditiveRefused`) | answered |
 | Speed | faster for a single metric | unestablished — see below |
@@ -329,8 +330,18 @@ limit in the BI literature, measured here against chinook.
 | **Semi-additive quantities** | A balance sums across accounts but not across time. grain has no time-dimension concept, so it cannot express the constraint. |
 | **Overlapping groups** | Revenue by playlist sums to 5738.28 against a true 2328.60. Both flag `additive: false`; neither can give a correct total. |
 | **Branching traversal** | `traverse` is a path, not a tree, so the chasm trap is inexpressible. Both refuse — with an error that describes a chain, not the branch that was asked for. |
-| **Medians and percentiles** | No distinct-sum rewrite exists, so `AggFunc` offers none. As an opaque `expr` the subquery engine answers; the symmetric engine refuses. |
+| ~~Medians and percentiles~~ | **Fixed.** `agg: median` and `agg: percentile` are native to both engines. The cited impossibility — "no distinct-sum rewrite" — rules out *that* rewrite, not every encoding. `percentile_cont` remains a non-goal. |
 | **`limit` without `order_by`** | Arbitrary rows, legally. The two engines may return *different* rows for one spec — the only place their output may differ without either being wrong. |
+
+**A defect this table's own harness found.** `aggregate_then_join` walked only
+far enough to reach a metric's grain — deliberately, since walking the fanning
+edges beyond it would replicate the grain's rows inside the very subquery built
+to stop that. But not walking an edge also means not *filtering* by it, so a
+traversal that restricts the population was invisible to the pre-aggregate: 54
+of 1888 groups wrong, one returning 200620 for a true 356284. Fixed with an
+`EXISTS` semi-join, which filters without multiplying. It survived since the
+rewrite was written because every summing metric in chinook sits at a grain
+nothing downstream eliminates — an order statistic surfaced it immediately.
 
 grain validates a metric's **grain** — that its rows are not replicated — and
 now also whether the **quantity** accumulates at all. That second check is a
@@ -397,7 +408,7 @@ group key, metric) combination and checks all three answers:
 
 | | |
 |---|---|
-| 61 combinations | **56 both correct · 5 symmetric-only · 0 wrong · 0 regressions** |
+| 85 combinations | **74 both correct · 11 symmetric-only · 0 wrong · 0 regressions** |
 
 All five divergences are one shape — a non-unique group key over a many-to-many.
 The subquery engine refuses it; hand-writing the `aggregate_then_join` it would
