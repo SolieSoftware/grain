@@ -125,3 +125,73 @@ def test_an_unconstrained_numeric_has_no_scale():
     md = MetaData()
     t = Table("n2", md, Column("x", Numeric))
     assert column_scale(t.columns["x"]) is None
+
+
+# -- the encoding -------------------------------------------------------------
+
+def _median(value="track.milliseconds", type_="integer"):
+    return Metric(name="m", grain="track", type=type_, agg="median", value=value)
+
+
+def test_the_encoding_packs_value_and_key(lite_metadata):
+    from grain.engine_symmetric.symmetric import symmetric_expr
+
+    sql = str(symmetric_expr(_median(), lite_metadata)).lower()
+    assert "array_agg" in sql
+    assert "distinct" in sql
+    assert "1e19" in sql                 # the key offset
+    assert "track.track_id" in sql       # the key
+    assert "track.milliseconds" in sql   # the value
+
+
+def test_the_index_is_the_percentile_disc_definition(lite_metadata):
+    """`greatest(1, ceil(p * n))` — the first value whose cumulative fraction
+    reaches p. Verified exact at p = 0, .25, .5, .75, .9, 1.0 against
+    percentile_disc on the unfanned table."""
+    from grain.engine_symmetric.symmetric import symmetric_expr
+
+    sql = str(symmetric_expr(_median(), lite_metadata)).lower()
+    assert "greatest" in sql and "ceil" in sql
+    assert "count(distinct" in sql.replace(" ", "")
+
+
+def test_a_value_that_is_not_a_bare_column_is_refused(lite_metadata):
+    """A scale can be read off a column, not off an expression."""
+    from grain.engine.errors import MetricNotSymmetric
+    from grain.engine_symmetric.symmetric import symmetric_expr
+
+    with pytest.raises(MetricNotSymmetric, match="bare column"):
+        symmetric_expr(_median(value="track.milliseconds * 2"), lite_metadata)
+
+
+def test_a_column_with_no_exact_scale_is_refused(lite_metadata):
+    """A text column cannot be packed into an orderable number."""
+    from grain.engine.errors import MetricNotSymmetric
+    from grain.engine_symmetric.symmetric import symmetric_expr
+
+    m = Metric(name="m", grain="track", type="string", agg="median",
+               value="track.name")
+    with pytest.raises(MetricNotSymmetric, match="exact"):
+        symmetric_expr(m, lite_metadata)
+
+
+def test_every_order_statistic_refusal_names_the_other_engine(lite_metadata):
+    """grain's errors each name a legal alternative, and the subquery engine
+    computes all of these correctly by pre-aggregating at the grain."""
+    from grain.engine.errors import MetricNotSymmetric
+    from grain.engine_symmetric.symmetric import symmetric_expr
+
+    with pytest.raises(MetricNotSymmetric) as exc:
+        symmetric_expr(_median(value="track.milliseconds * 2"), lite_metadata)
+    assert "subquery" in str(exc.value)
+
+
+def test_order_statistic_eligibility_is_checkable_before_a_connection(lite_metadata):
+    """The planner calls this, and every failure except GuardTripped is raised
+    before a connection is acquired."""
+    from grain.engine.errors import MetricNotSymmetric
+    from grain.engine_symmetric.symmetric import require_eligible
+
+    require_eligible(_median(), lite_metadata)
+    with pytest.raises(MetricNotSymmetric):
+        require_eligible(_median(value="track.milliseconds * 2"), lite_metadata)

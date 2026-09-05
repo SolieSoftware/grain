@@ -43,6 +43,7 @@ technique whose failure mode is a silently dropped row.
 """
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -56,10 +57,12 @@ from sqlalchemy import (
     func,
     literal_column,
 )
+from sqlalchemy.dialects.postgresql import aggregate_order_by
 from sqlalchemy.sql.elements import ColumnElement
 
 from ..engine.errors import MetricNotSymmetric, NoIntegerKeyForGrain
 from ..engine.ontology import Metric
+from .scale import column_scale
 
 K = literal_column("1e30")
 """The key offset.
@@ -81,6 +84,38 @@ weakest point and keeps a self-enforcing SQL guard in reserve.
 
 EXACT_TYPES: frozenset[str] = frozenset({"integer", "decimal"})
 """Value types that encode exactly. Anything else is refused, never rounded."""
+
+ORDER_STATISTICS: frozenset[str] = frozenset({"median", "percentile"})
+"""Aggregates needing the ARRAY encoding rather than the sum encoding.
+
+A sum decomposes -- `SUM(DISTINCT k*K + v) - SUM(DISTINCT k*K)` recovers the
+total because addition is associative and the key contribution cancels exactly.
+An order statistic does not: it needs the multiset of distinct values IN ORDER,
+so it is built by sorting an encoded array and indexing it.
+
+The BI literature says a median has no distinct-sum rewrite. True, and narrower
+than it sounds -- it rules out THAT rewrite, not every encoding.
+"""
+
+KEY_OFFSET = literal_column("1e19")
+"""The key offset for the ARRAY encoding. Deliberately NOT `K`.
+
+Both constants separate a value from a key, and their guarantees are not the
+same. `K = 1e30` pairs with `BOUND` -- a limit on a VALUE, which nothing in the
+schema constrains, so it can only be checked at load and later writes can
+violate it silently.
+
+This one bounds a KEY. The requirement is `KEY_OFFSET > max(pk)`, and a bigint
+cannot exceed 9.22e18, so the key's own type guarantees it. A proof rather than
+a measurement: nothing to check, nothing to drift.
+
+Sharing one symbol would hide that difference, and the difference is the whole
+reason this encoding is sounder than the one beside it.
+"""
+
+BARE_COLUMN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*$")
+"""A value that is nothing but one `table.column`. Order statistics accept only
+this shape: a scale can be read off a column, not off `a * b`."""
 
 NEEDS_ENCODING: frozenset[str] = frozenset({"sum", "avg"})
 """Aggregates whose value must be carried through the encoding.
@@ -125,6 +160,12 @@ def require_eligible(metric: Metric, metadata: MetaData) -> None:
             f"its type '{metric.type}' does not encode exactly, and an inexact "
             f"encoding loses digits silently",
         )
+    if metric.agg in ORDER_STATISTICS:
+        # Building the expression IS the eligibility check -- it raises for a
+        # non-bare value or a column with no exact scale. Done here so the
+        # refusal lands before a connection is acquired.
+        order_statistic_expr(metric, metadata)
+        return
     if metric.agg in NEEDS_ENCODING or metric.agg == "count":
         grain_key(metric, metadata)
 
@@ -148,6 +189,62 @@ def _as_declared(metric: Metric, expr: ColumnElement[Any]) -> ColumnElement[Any]
     return expr
 
 
+def order_statistic_expr(metric: Metric, metadata: MetaData) -> ColumnElement[Any]:
+    """A median or percentile that survives a fanning join, in one pass.
+
+        encoded = (v * 10^s) * K + pk
+        result  = floor(sorted_distinct[greatest(1, ceil(p*n))] / K) / 10^s
+
+    ORDERING: `10^s` and `K` are positive constants, so the encoded number sorts
+    in the same order as `v`, with the key in the low digits breaking ties
+    without disturbing that order.
+
+    DEDUPLICATION: DISTINCT applies to the encoded pair, which is equivalent to
+    deduplicating on the key, because `v` is functionally determined by `pk`.
+    That is WHY the key is in the encoding at all -- `array_agg(DISTINCT v)`
+    would collapse two different rows that happen to share a value, and those
+    are two data points.
+
+`KEY_OFFSET` NEEDS NO RUNTIME CHECK, unlike the sum encoding's `|v| < 5e29`.
+    The requirement is `KEY_OFFSET > max(pk)`, and a bigint cannot exceed
+    9.22e18, so the key's own TYPE guarantees it. A proof rather than a
+    measurement, and the reason this encoding cannot drift as data grows.
+
+    `10^s` IS EXACT because `s` is the column's own reflected scale, so
+    multiplying clears the fraction with nothing to round. This is precisely
+    where Looker loses digits: it FLOOR-scales to a guessed precision.
+    """
+    match = BARE_COLUMN.match(metric.value or "")
+    if match is None:
+        raise MetricNotSymmetric(
+            metric.name,
+            "an order statistic needs the scale of the column it measures, and "
+            "a scale can be read off a bare column but not off an expression",
+        )
+    table_name, column_name = match.group(1), match.group(2)
+    column = metadata.tables[table_name].columns[column_name]
+    scale = column_scale(column)
+    if scale is None:
+        raise MetricNotSymmetric(
+            metric.name,
+            f"'{table_name}.{column_name}' has no exact decimal scale, so it "
+            f"cannot be encoded without rounding",
+        )
+
+    key = grain_key(metric, metadata)
+    factor = literal_column(str(10 ** scale))
+    # Built ONCE and passed to both the DISTINCT and the ORDER BY: Postgres
+    # requires them to be the same expression, and two structurally-equal but
+    # distinct objects render as two expressions.
+    encoded = cast(column, Numeric) * factor * KEY_OFFSET + cast(key, Numeric)
+    p = 0.5 if metric.agg == "median" else metric.percentile
+    index = func.greatest(
+        1, func.ceil(literal_column(str(p)) * func.count(distinct(key)))
+    )
+    picked = func.array_agg(aggregate_order_by(distinct(encoded), encoded))[index]
+    return func.floor(picked / KEY_OFFSET) / factor
+
+
 def symmetric_expr(metric: Metric, metadata: MetaData) -> ColumnElement[Any]:
     """The metric as a single-pass, fan-out-correct aggregate."""
     require_eligible(metric, metadata)
@@ -156,6 +253,9 @@ def symmetric_expr(metric: Metric, metadata: MetaData) -> ColumnElement[Any]:
         # Immune to replication -- the plain aggregate is already the right
         # number, and encoding it would add cost for nothing.
         return literal_column(metric.sql_expr)
+
+    if metric.agg in ORDER_STATISTICS:
+        return order_statistic_expr(metric, metadata)
 
     key = grain_key(metric, metadata)
     if metric.agg == "count":
