@@ -164,3 +164,52 @@ def test_the_subquery_engine_refuses_a_median_with_no_group_key(engines):
     with pytest.raises(NonAdditiveRefused):
         engines["subquery"].query(spec)
     assert engines["symmetric"].query(spec).rows[0][0] is not None
+
+
+def test_the_pre_aggregate_respects_downstream_filtering(engines, db_engine):
+    """A traversal that RESTRICTS the population must restrict the pre-aggregate.
+
+    `Track -> Track_InvoiceLines` means tracks that actually sold. 1519 of
+    chinook's 3503 tracks never did, and the pre-aggregate used to compute over
+    all of them because it walks only far enough to reach the grain — which
+    filters nothing.
+
+    Both engines must now agree with SQL that does the restriction by hand.
+    """
+    from grain.engine.spec import Hop
+
+    spec = QuerySpec(object="Track", traverse=[Hop(link="Track_InvoiceLines")],
+                     group_by=["name"], metrics=["median_duration"], limit=None)
+    with db_engine.connect() as conn:
+        truth = {r[0]: int(r[1]) for r in conn.execute(text("""
+            select t.name,
+                   percentile_disc(0.5) within group (order by t.milliseconds)
+            from (select distinct track_id, name, milliseconds from track) t
+            where exists (select 1 from invoice_line il
+                          where il.track_id = t.track_id)
+            group by t.name"""))}
+    for name, g in engines.items():
+        got = {r[0]: int(r[1]) for r in g.query(spec).rows}
+        assert got == truth, f"{name} disagrees with the restricted truth"
+
+
+def test_the_restriction_does_not_replicate_the_grain(engines, db_engine):
+    """The reason the pre-aggregate skipped those edges in the first place.
+
+    Filtering must not reintroduce defect C5 — walking a fanning edge inside the
+    subquery would replicate the grain's rows there. A track sold six times must
+    still count once, so `units_sold` at line grain and a count of distinct
+    tracks both have to survive the change.
+    """
+    from grain.engine.spec import Hop
+
+    spec = QuerySpec(object="Track", traverse=[Hop(link="Track_InvoiceLines")],
+                     group_by=["name"], metrics=["track_count"], limit=None)
+    with db_engine.connect() as conn:
+        truth = {r[0]: int(r[1]) for r in conn.execute(text("""
+            select t.name, count(distinct t.track_id) from track t
+            join invoice_line il on il.track_id = t.track_id
+            group by t.name"""))}
+    for name, g in engines.items():
+        got = {r[0]: int(r[1]) for r in g.query(spec).rows}
+        assert got == truth, f"{name} replicated or dropped rows"

@@ -585,6 +585,63 @@ def _key_match(
     return outer == inner
 
 
+
+def _survives_downstream(
+    metadata: MetaData, rq: ResolvedQuery, skipped: list[Edge], tag: str
+) -> ColumnElement[bool] | None:
+    """Restrict a pre-aggregate to grain rows the SKIPPED edges would have kept.
+
+    `_aggregate_then_join` walks only far enough to reach the metric's grain,
+    and deliberately not the fanning edges beyond it: walking those would
+    replicate the grain's own rows inside the very subquery built to stop that
+    (defect C5). Correct, and incomplete — not walking an edge also means not
+    FILTERING by it.
+
+    The edges are inner joins, so they restrict the population. `Track ->
+    Track_InvoiceLines` means tracks that actually sold; the pre-aggregate,
+    seeing none of it, computed over all 3503 tracks including the 1519 that
+    never sold. Measured before this fix: 54 of 1888 name-groups wrong, one
+    returning 200620 for a true 356284.
+
+    EXISTS is the tool that filters WITHOUT replicating -- the same reason
+    `_exists_clause` uses it for a dotted filter. A semi-join keeps a grain row
+    if the chain matches at least once, however many times it matches, so the
+    C5 property the skip was protecting is preserved exactly.
+
+    Returns None when nothing was skipped, so the common case adds no clause.
+    """
+    if not skipped:
+        return None
+
+    # The chain departs from whatever object the last applied edge landed on --
+    # the root when the prefix is empty.
+    start_index = len(rq.path) - len(skipped)
+    start_obj = rq.root if start_index == 0 else rq.path[start_index - 1].to_object
+    start_table = metadata.tables[start_obj.primary]
+
+    # The departure table is ALIASED inside the EXISTS and tied to the outer row
+    # by primary key. Reusing the un-aliased table instead puts a second `track`
+    # in the subquery's FROM, and `correlate()` cannot remove what `select_from`
+    # put there -- the clause then reads "does ANY sold track exist", which is
+    # true for every row and filters nothing. That was the first attempt.
+    keys = list(start_table.primary_key.columns)
+    if not keys:
+        # Without a key there is no way to say "the same row", so the semi-join
+        # cannot be built. Leaving the pre-aggregate unfiltered is the
+        # pre-existing behaviour, which is wrong but no more wrong than before;
+        # refusing here would break queries that work today.
+        return None
+
+    alias = start_table.alias(f"{tag}_start")
+    inner = Scope(metadata)
+    inner.register(None if start_index == 0 else start_index - 1,
+                   start_obj.primary, alias)
+    sub = select(literal_column("1")).select_from(alias)
+    sub = _apply_edges(sub, inner, skipped, tag=tag)
+    same_row = and_(*[alias.columns[k.name] == k for k in keys])
+    return sub.where(same_row).exists()
+
+
 def _aggregate_then_join(
     stmt: Select[Any],
     outer: Scope,
@@ -628,6 +685,11 @@ def _aggregate_then_join(
     sub = _apply_object_joins(sub, inner, None, rq.root, root_table)
     sub = _apply_edges(sub, inner, rq.path[: mp.subquery_edges], tag=mp.metric.name)
     sub = _apply_filters(sub, inner, metadata, rq)
+    survives = _survives_downstream(
+        metadata, rq, rq.path[mp.subquery_edges:], tag=f"{mp.metric.name}_ds"
+    )
+    if survives is not None:
+        sub = sub.where(survives)
 
     keys = [inner.column(rp).label(rp.name) for rp in rq.group_by]
     sub = sub.with_only_columns(*keys, _metric_column(mp.metric))

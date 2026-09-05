@@ -92,25 +92,37 @@ def test_two_grains_produce_two_subqueries(chinook_lite, lite_metadata):
 
 def test_subquery_applies_only_the_prefix_reaching_the_grain(chinook_lite, lite_metadata):
     """The whole point of the rewrite: `Invoice_Lines` is DOWNSTREAM of invoice
-    grain, so it must not appear inside the subquery. Applying it there would
+    grain, so it must not be JOINED inside the subquery. Joining it there would
     replicate invoice rows inside the very subquery built to stop that — the
-    same 8.95x overstatement, one level down."""
+    same 8.95x overstatement, one level down.
+
+    Asserted on the JOIN rather than on the table's name appearing at all. The
+    table does now appear, inside an EXISTS: the pre-aggregate has to RESTRICT
+    itself to grain rows the downstream edges keep, or it computes over rows the
+    traversal excluded. A semi-join filters without multiplying, which is
+    precisely why EXISTS is the right tool and a join is not."""
     sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
                 metrics=["invoice_total"], traverse=BOTH_HOPS)
     inner = subquery_of(sql)
-    assert "invoice_line" not in inner
+    from_part = inner.split("WHERE EXISTS")[0]
+    assert "invoice_line" not in from_part, "must not be joined into the FROM"
+    assert "EXISTS" in inner, "but must restrict to rows it would have kept"
     assert "invoice_line" in sql  # the outer query still walks the declared path
 
 
 def test_root_grain_metric_pre_aggregates_over_the_root_table(chinook_lite, lite_metadata):
     """Task 8 made aggregate_then_join reachable for a metric AT the root: the
     prefix is empty and every fanning hop is downstream. The subquery must hang
-    off the root table itself, not off a joined-in child."""
+    off the root table itself, not off a joined-in child.
+
+    `invoice` is checked in the FROM only: it appears inside the EXISTS that
+    restricts the pre-aggregate to customers the traversal keeps."""
     sql = build(chinook_lite, lite_metadata, object="Customer", group_by=["country"],
                 metrics=["customer_count"], traverse=BOTH_HOPS)
     inner = subquery_of(sql)
-    assert "FROM customer" in inner
-    assert "invoice" not in inner
+    from_part = inner.split("WHERE EXISTS")[0]
+    assert "FROM customer" in from_part
+    assert "invoice" not in from_part
     assert "count(distinct customer.customer_id)" in inner
 
 
