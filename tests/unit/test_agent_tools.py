@@ -6,13 +6,62 @@ between a model's generated object and the engine, and it is pure given a Grain.
 import pytest
 
 from grain.agent import tools
-from grain.engine.spec import QuerySpec
+from grain.engine.spec import Hop, QuerySpec
 
 
-def test_the_tool_schema_is_the_queryspec_schema_itself():
-    """Not a hand-written copy. The contract the model is held to and the
-    contract the engine enforces must be the same object, or they drift."""
-    assert tools.tool_definition()["input_schema"] == QuerySpec.model_json_schema()
+def test_the_tool_schema_is_derived_from_the_queryspec_schema():
+    """Generated, not hand-written, so the shape the model is asked for cannot
+    drift from the shape the engine accepts.
+
+    DERIVED rather than identical: strict tool use rejects a set of JSON Schema
+    keywords and `_strict_safe` removes them. The structure must survive that —
+    stripping may only ever remove constraints, never reshape the contract.
+    """
+    tool = tools.tool_definition()["input_schema"]
+    real = QuerySpec.model_json_schema()
+    assert set(tool["properties"]) == set(real["properties"])
+    assert tool.get("required") == real.get("required")
+    assert set(tool.get("$defs", {})) == set(real.get("$defs", {}))
+
+
+def test_without_strict_the_full_schema_is_sent_unchanged():
+    """`strict=False` sends exactly what Pydantic generated, constraints and
+    all. The API accepts more JSON Schema outside strict mode, so this is the
+    setting to reach for when the question is what the schema can express."""
+    assert tools.tool_definition(strict=False)["input_schema"] == QuerySpec.model_json_schema()
+    assert "strict" not in tools.tool_definition(strict=False)
+
+
+def test_stripping_loosens_what_is_advertised_not_what_is_enforced():
+    """The justification for stripping at all. If Pydantic stopped enforcing
+    what the schema no longer states, the constraint would be gone rather than
+    merely unadvertised."""
+    from pydantic import ValidationError
+
+    tool = tools.tool_definition()["input_schema"]
+    assert "minimum" not in tool["properties"]["limit"]["anyOf"][0]
+    with pytest.raises(ValidationError):
+        QuerySpec(object="Customer", limit=0)
+    with pytest.raises(ValidationError):
+        QuerySpec(object="Customer", traverse=[Hop(link="X", max_depth=99)])
+
+
+def test_no_unsupported_keyword_survives_in_strict_mode():
+    """Whack-a-mole is the failure mode — each keyword discovered costs a 400 in
+    front of a user — so walk the whole tree, not the two nodes that broke."""
+    found = []
+
+    def walk(node, path="root"):
+        if isinstance(node, dict):
+            found.extend(f"{path}.{k}" for k in node if k in tools.UNSUPPORTED_KEYWORDS)
+            for k, v in node.items():
+                walk(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+
+    walk(tools.tool_definition()["input_schema"])
+    assert not found, found
 
 
 def test_the_schema_is_strict_and_closed():

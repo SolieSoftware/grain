@@ -25,6 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Claude model id")
     parser.add_argument("--show-spec", action="store_true",
                         help="print each QuerySpec the agent produced")
+    parser.add_argument("--no-strict", action="store_true",
+                        help="send the full JSON Schema including min/max bounds, "
+                             "instead of the subset strict tool use accepts")
     args = parser.parse_args(argv)
 
     url = os.environ.get("GRAIN_DATABASE_URL")
@@ -46,12 +49,15 @@ def main(argv: list[str] | None = None) -> int:
     db = create_engine(url, future=True)
     grain = Grain.load(domain_dir, db, engine_name=args.engine)
     try:
-        session = AgentSession(grain, model=args.model)
+        session = AgentSession(grain, model=args.model,
+                               strict=not args.no_strict)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
 
     print(BANNER.format(engine=args.engine, model=args.model))
+    if args.no_strict:
+        print("strict tool use OFF — full schema sent, bounds included\n")
     while True:
         try:
             question = input("> ").strip()

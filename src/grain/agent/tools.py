@@ -1,10 +1,21 @@
 """The one tool the model gets, and what happens when it calls it.
 
-`QuerySpec.model_json_schema()` is used VERBATIM as the tool's input schema.
-That is not a shortcut -- it means the contract the model is held to and the
-contract the engine enforces are the same object, and cannot drift. `QuerySpec`
-already sets `extra="forbid"`, so Pydantic emits `additionalProperties: false`
-and the schema satisfies strict tool use as-is.
+The tool's input schema is derived from `QuerySpec.model_json_schema()` -- one
+generated object rather than a hand-written copy, so the shape the model is
+asked for cannot drift from the shape the engine accepts.
+
+It is DERIVED, not verbatim. Strict tool use accepts a subset of JSON Schema and
+rejects the whole tool definition if anything falls outside it, so `_strict_safe`
+strips the keywords it cannot carry. An earlier version of this module claimed
+the schema was used verbatim; the first real API call proved otherwise, twice.
+
+What that costs is nothing that matters. The stripped keywords are value
+constraints (`minimum`, `pattern`, ...), so the ADVERTISED schema is looser than
+the real one -- but `run()` below still validates every call through Pydantic,
+which enforces the full constraint set. A model that sends `limit: 0` gets a
+validation error handed back as a repair, exactly like any other bad spec. The
+constraints that matter to the model are restated in `DESCRIPTION` instead,
+where prose can carry what the schema cannot.
 """
 from __future__ import annotations
 
@@ -30,21 +41,60 @@ an object you traversed to, and requires that link to be in `traverse`. A dotted
 filter does NOT require the traversal: it selects which root objects the query
 is about.
 
+`limit` must be 1 or more if you set it, and `max_depth` on a hop must be
+between 1 and 50. These are enforced even though the schema does not state them.
+
 If the query is refused, the error names legal alternatives. Use them."""
 
 
-def tool_definition() -> dict[str, Any]:
+# Keywords strict tool use rejects outright. Stripping them changes what is
+# ADVERTISED, never what is enforced -- Pydantic still applies every one of them
+# to the input. Two were found the hard way, each as a 400 on a real call:
+#   "Schema type is missing for schema: {'default': None, 'title': 'Value'}"
+#   "For 'integer' type, properties maximum, minimum are not supported"
+# The rest are listed pre-emptively because they are the same class of thing and
+# discovering each one costs a failed request in front of a user.
+UNSUPPORTED_KEYWORDS: frozenset[str] = frozenset({
+    "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    "minLength", "maxLength", "pattern", "format",
+    "minItems", "maxItems", "uniqueItems",
+})
+
+
+def _strict_safe(node: Any) -> Any:
+    """The schema with everything strict tool use cannot express removed."""
+    if isinstance(node, dict):
+        return {
+            k: _strict_safe(v)
+            for k, v in node.items()
+            if k not in UNSUPPORTED_KEYWORDS
+        }
+    if isinstance(node, list):
+        return [_strict_safe(v) for v in node]
+    return node
+
+
+def tool_definition(strict: bool = True) -> dict[str, Any]:
     """The tool as the API wants it.
 
     `strict: True` is a top-level field on the tool, not part of `tool_choice`.
-    It guarantees the input validates against the schema exactly, which is what
-    makes `QuerySpec.model_validate` below a formality in the normal case rather
-    than the only thing standing between a bad generation and the engine.
+    It constrains the generation to the schema, which is why `run()` rarely sees
+    a malformed spec -- but it is not why a malformed spec is safe. That is
+    Pydantic's job, and it does it whether or not this flag is set.
     """
+    schema = QuerySpec.model_json_schema()
+    if not strict:
+        # Outside strict mode the API accepts far more JSON Schema, so the
+        # constraints go across intact and the model sees the real bounds. The
+        # cost is that generation is no longer constrained to the schema, so
+        # malformed specs get likelier — each one costs a repair round-trip.
+        # Never a wrong ANSWER though: Pydantic is the boundary either way.
+        return {"name": TOOL_NAME, "description": DESCRIPTION,
+                "input_schema": schema}
     return {
         "name": TOOL_NAME,
         "description": DESCRIPTION,
-        "input_schema": QuerySpec.model_json_schema(),
+        "input_schema": _strict_safe(schema),
         "strict": True,
     }
 

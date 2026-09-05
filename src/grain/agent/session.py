@@ -68,10 +68,16 @@ class AgentSession:
         api_key: str | None = None,
         max_repairs: int = MAX_REPAIRS,
         client: Any | None = None,
+        strict: bool = True,
     ) -> None:
         self.grain = grain
         self.model = model
         self.max_repairs = max_repairs
+        # Strict tool use constrains generation to the schema, at the cost of
+        # the schema being expressible only in a subset of JSON Schema. Off, the
+        # real bounds go across but malformed specs get likelier. Correctness is
+        # unaffected either way -- Pydantic validates every call regardless.
+        self.strict = strict
         # `client` is injectable so the loop can be tested without a network
         # call or an API key. Nothing else about the class changes.
         self.client = client if client is not None else _client(api_key)
@@ -87,7 +93,7 @@ class AgentSession:
             # with overlapping metric names is exactly what it helps with.
             # `budget_tokens` is rejected on this model family.
             thinking={"type": "adaptive"},
-            tools=[tools.tool_definition()],
+            tools=[tools.tool_definition(strict=self.strict)],
             messages=self.messages,
         )
 
