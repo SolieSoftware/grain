@@ -4,12 +4,16 @@ description: A digital music store — artists, tracks, playlists, customers, in
 objects:
   Artist:
     primary: artist
+    description: >
+      A recording artist. Owns albums, and reaches tracks only through them.
     title_property: name
     properties:
       name: {column: artist.name, type: string, nullable: true}
 
   Album:
     primary: album
+    description: >
+      A released collection of tracks by one artist.
     title_property: title
     properties:
       title: {column: album.title, type: string}
@@ -43,18 +47,24 @@ objects:
 
   Genre:
     primary: genre
+    description: >
+      A musical genre. An attribute of a track, not a thing that is sold.
     title_property: name
     properties:
       name: {column: genre.name, type: string, nullable: true}
 
   MediaType:
     primary: media_type
+    description: >
+      The encoding format of a track. An attribute, not a thing that is sold.
     title_property: name
     properties:
       name: {column: media_type.name, type: string, nullable: true}
 
   Playlist:
     primary: playlist
+    description: >
+      A user-curated collection of tracks. Many-to-many with Track: a track sits on any number of playlists, which is what makes playlist totals overlap.
     title_property: name
     properties:
       # Chinook ships DUPLICATE playlist names ('Music' x2, 'Movies' x2, 'TV
@@ -70,6 +80,8 @@ objects:
 
   Customer:
     primary: customer
+    description: >
+      A person who buys tracks. Each has one assigned support rep.
     title_property: last_name
     properties:
       first_name: {column: customer.first_name, type: string}
@@ -80,6 +92,8 @@ objects:
 
   Invoice:
     primary: invoice
+    description: >
+      One purchase document, with a header total and many lines.
     properties:
       invoice_date: {column: invoice.invoice_date, type: datetime}
       billing_country: {column: invoice.billing_country, type: string, nullable: true}
@@ -87,12 +101,16 @@ objects:
 
   InvoiceLine:
     primary: invoice_line
+    description: >
+      One line of a purchase — a single track, its price and quantity. The grain at which revenue is measured.
     properties:
       unit_price: {column: invoice_line.unit_price, type: decimal}
       quantity: {column: invoice_line.quantity, type: integer}
 
   Employee:
     primary: employee
+    description: >
+      A member of staff. Self-referential: an employee may report to another.
     title_property: last_name
     properties:
       # Employee is the other object that can root or be traversed into a
@@ -108,6 +126,8 @@ objects:
 links:
   Artist_Albums:
     from: Artist
+    description: >
+      The albums by an artist. Fans out.
     to: Album
     kind: direct
     on: [{from: artist.artist_id, to: album.artist_id}]
@@ -115,6 +135,8 @@ links:
 
   Album_Tracks:
     from: Album
+    description: >
+      The tracks on an album. Fans out — one album, many tracks.
     to: Track
     kind: direct
     on: [{from: album.album_id, to: track.album_id}]
@@ -122,6 +144,8 @@ links:
 
   Track_Album:
     from: Track
+    description: >
+      The album a track belongs to. Does not fan out.
     to: Album
     kind: direct
     on: [{from: track.album_id, to: album.album_id}]
@@ -130,6 +154,8 @@ links:
 
   Playlist_Tracks:
     from: Playlist
+    description: >
+      The tracks on a playlist, through playlist_track. Many-to-many: totals across playlists double-count by construction.
     to: Track
     kind: through
     via: playlist_track
@@ -139,6 +165,8 @@ links:
 
   Track_InvoiceLines:
     from: Track
+    description: >
+      The sales of a track. Fans out — one track, many lines.
     to: InvoiceLine
     kind: direct
     on: [{from: track.track_id, to: invoice_line.track_id}]
@@ -146,6 +174,8 @@ links:
 
   Customer_Invoices:
     from: Customer
+    description: >
+      The purchases a customer made. Fans out — one customer, many invoices.
     to: Invoice
     kind: direct
     on: [{from: customer.customer_id, to: invoice.customer_id}]
@@ -153,6 +183,8 @@ links:
 
   Invoice_Lines:
     from: Invoice
+    description: >
+      The lines of an invoice. Fans out — this is the hop that inflates a naive invoice_total.
     to: InvoiceLine
     kind: direct
     on: [{from: invoice.invoice_id, to: invoice_line.invoice_id}]
@@ -168,6 +200,8 @@ links:
 
   Employee_Manager:
     from: Employee
+    description: >
+      Who an employee reports to. Recursive: traversing it walks the whole management chain, not one hop, which makes ancestor groups overlap.
     to: Employee
     kind: recursive
     on: [{from: employee.reports_to, to: employee.employee_id}]
@@ -205,18 +239,43 @@ metrics:
     agg: sum
     value: "invoice_line.quantity"
     type: integer
+    description: >
+      Count of items sold, at line grain. A QUANTITY, not money — chinook sells
+      one of each track per line, so this is very close to a line count.
+    ai_context:
+      synonyms: [units sold, quantity sold, items sold, how many sold, volume]
+      instructions: >
+        Never the answer to "how much did we sell" or any question about value
+        — that is revenue. Use this only when the question is explicitly about
+        counts of items rather than money.
 
   track_count:
     grain: track
     agg: count_distinct
     value: "track.track_id"
     type: integer
+    description: >
+      Distinct tracks in the catalogue reached by the query. A CATALOGUE size,
+      not a sales figure — a track counts whether or not it ever sold.
+    ai_context:
+      synonyms: [tracks, number of tracks, song count, catalogue size]
+      instructions: >
+        For "how many tracks are on X". If the question is about tracks that
+        SOLD, traverse Track_InvoiceLines and use units_sold or revenue instead
+        — this metric counts catalogue entries, not sales.
 
   customer_count:
     grain: customer
     agg: count_distinct
     value: "customer.customer_id"
     type: integer
+    description: Distinct customers, at customer grain.
+    ai_context:
+      synonyms: [customers, number of customers, buyers, how many customers]
+      instructions: >
+        Safe to combine with any traversal: DISTINCT on the key means a customer
+        joined to many invoices is still counted once. For "customers who bought
+        X", traverse to X and group as usual.
 
   employee_count:
     grain: employee
