@@ -123,18 +123,14 @@ def test_a_metric_summing_a_rate_is_refused_before_either_engine_sees_it(
 # 3. Aggregates with no distinct-sum rewrite.
 # --------------------------------------------------------------------------
 
-def test_a_median_cannot_be_declared_structurally():
-    """The taxonomy's hard boundary, enforced by the type.
-
-    A median has no equivalent distinct-sum rewrite — you cannot recover the
-    middle value of a set from sums of encoded keys — so `AggFunc` does not
-    offer one. Refusing at declaration beats accepting it and being wrong.
-    """
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
-        Metric(name="m", grain="track", type="decimal", agg="median",
-               value="track.milliseconds")
+# `test_a_median_cannot_be_declared_structurally` stood here. It asserted that
+# AggFunc offered no median, on the reasoning that an order statistic has no
+# distinct-sum rewrite so none could be offered honestly.
+#
+# The reasoning was sound and the conclusion too broad. It rules out THAT
+# rewrite, not every encoding: packing the value into the high digits of a
+# numeric and the key into the low ones gives an orderable scalar that DISTINCT
+# deduplicates correctly. Deleted rather than inverted, per this file's own bar.
 
 
 def test_a_median_is_answerable_only_by_the_subquery_engine(db_engine):
