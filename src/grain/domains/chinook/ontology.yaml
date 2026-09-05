@@ -277,6 +277,30 @@ metrics:
         joined to many invoices is still counted once. For "customers who bought
         X", traverse to X and group as usual.
 
+  median_duration:
+    grain: track
+    agg: median
+    value: "track.milliseconds"
+    type: integer
+    description: >
+      The middle track duration, as a duration some track actually has —
+      percentile_disc, not an interpolated midpoint.
+    ai_context:
+      synonyms: [median duration, typical length, middle track length]
+      instructions: >
+        A CATALOGUE statistic: it describes tracks, not sales. For the typical
+        duration of tracks that SOLD, traverse Track_InvoiceLines first.
+
+  p90_duration:
+    grain: track
+    agg: percentile
+    percentile: 0.9
+    value: "track.milliseconds"
+    type: integer
+    description: The duration below which 90% of tracks fall.
+    ai_context:
+      synonyms: [90th percentile duration, p90 length, long tracks]
+
   employee_count:
     grain: employee
     agg: count_distinct
