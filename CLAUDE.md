@@ -27,6 +27,13 @@ The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
 colour.**
 
+**Verify with the command the docs give, not a convenient variant.** I ran
+`python -m pytest` throughout a session while documenting `uv run pytest`. The
+first puts the working directory on `sys.path` and the second does not, so
+`tests/corpus.py` imported fine for me and failed at collection for everyone
+else. `pythonpath = ["."]` in `pyproject.toml` fixes it; the lesson is that a
+green run proves the command you ran, not the command you wrote down.
+
 ## The rule that matters most
 
 **A wrong number is worse than no answer.** Every design decision in this repo

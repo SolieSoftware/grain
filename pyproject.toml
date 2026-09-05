@@ -44,6 +44,11 @@ select = ["F", "E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repo root on sys.path, so `from tests.corpus import ...` resolves.
+# Without it the suite collects only under `python -m pytest` (which adds the
+# working directory itself) and fails under `uv run pytest` / a bare `pytest`,
+# which is what the README tells people to use.
+pythonpath = ["."]
 markers = ["integration: requires a loaded chinook database"]
 addopts = "-ra"
 # A cartesian product is a wrong ANSWER, not a style complaint: SQLAlchemy adds
