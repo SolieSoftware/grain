@@ -14,6 +14,7 @@ Everything else — fan-out, replication, rewrites, encodings — is implementat
 """
 from __future__ import annotations
 
+import math
 import os
 from collections import defaultdict
 from decimal import Decimal
@@ -60,7 +61,14 @@ METRICS = {
     "customer_count": ("customer", "count_distinct", None),
     "track_count": ("track", "count_distinct", None),
     "employee_count": ("employee", "count_distinct", None),
+    # Order statistics. p is carried alongside the aggregate because the oracle
+    # has no ontology to read it from -- it restates the question in its own
+    # vocabulary, deliberately, so a misreading of the ontology cannot reach it.
+    "median_duration": ("track", "median", lambda r: r["milliseconds"]),
+    "p90_duration": ("track", "percentile", lambda r: r["milliseconds"]),
 }
+
+PERCENTILE_P = {"median_duration": 0.5, "p90_duration": 0.9}
 
 
 def load(conn, table):
@@ -125,7 +133,14 @@ def answer(db, obj, links, group_props, metric_name, filters=None):
 
     out = {}
     for key, rows in groups.items():
-        if agg == "count_distinct":
+        if agg in ("median", "percentile"):
+            # percentile_disc: the first value whose cumulative fraction reaches
+            # p, over the DISTINCT grain rows. Computed from raw Python rows,
+            # sharing no SQL with either engine.
+            values = sorted(value_of(r) for r in rows.values())
+            p = PERCENTILE_P[metric_name]
+            out[key] = values[max(1, math.ceil(p * len(values))) - 1]
+        elif agg == "count_distinct":
             out[key] = len(rows)
         else:
             total = sum((Decimal(str(value_of(r))) for r in rows.values()),

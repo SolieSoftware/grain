@@ -242,7 +242,12 @@ def order_statistic_expr(metric: Metric, metadata: MetaData) -> ColumnElement[An
         1, func.ceil(literal_column(str(p)) * func.count(distinct(key)))
     )
     picked = func.array_agg(aggregate_order_by(distinct(encoded), encoded))[index]
-    return func.floor(picked / KEY_OFFSET) / factor
+    # Cast back to the declared type, exactly as the sum encoding does. The
+    # encoding is numeric arithmetic whatever the value's own type, so a metric
+    # declared `integer` would otherwise return Decimal here and int from the
+    # subquery engine. The differential harness caught precisely that, for the
+    # second time -- it is the same defect `_as_declared` was written for.
+    return _as_declared(metric, func.floor(picked / KEY_OFFSET) / factor)
 
 
 def symmetric_expr(metric: Metric, metadata: MetaData) -> ColumnElement[Any]:

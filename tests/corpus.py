@@ -89,6 +89,16 @@ CORPUS: list[tuple[str, QuerySpec]] = [
                   group_by=["country"], metrics=["units_sold"], limit=None),
     ),
     (
+        "median-over-a-many-to-many",
+        QuerySpec(object="Playlist", traverse=[Hop(link="Playlist_Tracks")],
+                  group_by=["id"], metrics=["median_duration"], limit=None),
+    ),
+    (
+        "p90-over-a-one-to-many",
+        QuerySpec(object="Album", traverse=[Hop(link="Album_Tracks")],
+                  group_by=["title"], metrics=["p90_duration"], limit=None),
+    ),
+    (
         "recursive-one-hop",
         QuerySpec(object="Employee",
                   traverse=[Hop(link="Employee_Manager", max_depth=1)],

@@ -60,6 +60,31 @@ in a different language over SQL you wrote by hand.
 
 ---
 
+### A second implementation earns its cost the day it disagrees
+
+The differential harness plus the oracle found a real defect in the **default**
+engine — one that had been there since the fan-out rewrite was written, and that
+no amount of testing that engine against itself would have surfaced.
+
+`aggregate_then_join` pre-aggregates a metric at its own grain, walking only far
+enough to reach it. That is deliberate: applying the downstream FANNING edges
+would replicate the grain's rows inside the very subquery built to prevent that.
+But not walking an edge also means **not filtering by it**. A traversal that
+restricts the population — `Track -> Track_InvoiceLines`, meaning tracks that
+actually sold — is invisible to the pre-aggregate, which computes over every
+track sharing the group key.
+
+It stayed hidden because every summing metric in the domain sits at a grain
+nothing downstream eliminates. An order statistic is sensitive to precisely
+which rows are in the set, so it surfaced on the first enumerated sweep: 54 of
+1888 groups differ, one of them returning 200620 where the answer is 356284.
+
+**Transferable:** the argument for a second implementation is usually stated as
+redundancy, and that undersells it. Its value is that it disagrees, and a
+disagreement you cannot dismiss is the only cheap way to find a bug that has
+been correct-looking for months. Build the second one differently enough that it
+*can* disagree.
+
 ## Modelling
 
 ### Validating the grain of a metric says nothing about whether the quantity is additive

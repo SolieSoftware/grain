@@ -202,3 +202,56 @@ def test_a_limit_without_an_order_returns_arbitrary_rows(which, engines):
     result = engines[which].query(spec)
     assert len(result.rows) == 3
     assert result.limit_reached is True
+
+
+# --------------------------------------------------------------------------
+# 6. The subquery engine's pre-aggregate ignores downstream filtering.
+# --------------------------------------------------------------------------
+
+def test_the_subquery_pre_aggregate_ignores_the_downstream_join(db_engine):
+    """A real defect in the DEFAULT engine, found by the differential harness
+    plus the oracle, and pinned here rather than quietly fixed.
+
+    `_aggregate_then_join` walks only enough edges to reach the metric's grain.
+    That is deliberate and correct as far as it goes: applying the downstream
+    FANNING edges would replicate the grain's own rows inside the very subquery
+    built to stop that (defect C5).
+
+    But not walking an edge also means not FILTERING by it. `Track ->
+    Track_InvoiceLines` restricts the query to tracks that actually sold; the
+    pre-aggregate, walking zero edges, computes over every track sharing the
+    group key — including 1519 tracks that never sold.
+
+    Measured: 54 of 1888 name-groups differ. For 'All My Love' the subquery
+    engine returns 200620 where the answer to the question asked is 356284.
+
+    Invisible until now because chinook's summing metrics all sit at a grain
+    nothing downstream eliminates. An order statistic is sensitive to exactly
+    which rows are in the set, so it surfaced immediately.
+
+    The symmetric engine is correct here — it computes over the rows present in
+    the join, because it never leaves the join.
+    """
+    from grain.engine.spec import Hop
+
+    spec = QuerySpec(object="Track", traverse=[Hop(link="Track_InvoiceLines")],
+                     group_by=["name"], metrics=["median_duration"], limit=None)
+    sub = {r[0]: r[1] for r in Grain.load(
+        CHINOOK_DIR, db_engine, engine_name="subquery").query(spec).rows}
+    sym = {r[0]: r[1] for r in Grain.load(
+        CHINOOK_DIR, db_engine, engine_name="symmetric").query(spec).rows}
+
+    with db_engine.connect() as conn:
+        truth = {r[0]: r[1] for r in conn.execute(text("""
+            select t.name,
+                   percentile_disc(0.5) within group (order by t.milliseconds)
+            from (select distinct track_id, name, milliseconds from track) t
+            where exists (select 1 from invoice_line il
+                          where il.track_id = t.track_id)
+            group by t.name"""))}
+
+    assert set(sub) == set(sym) == set(truth), "the GROUP set is right in both"
+    differing = [k for k in truth if int(sub[k]) != int(truth[k])]
+    assert len(differing) == 54, "if this changes, the defect changed"
+    assert all(int(sym[k]) == int(truth[k]) for k in truth), \
+        "the symmetric engine computes over the joined rows and is correct"
