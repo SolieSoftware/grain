@@ -13,11 +13,11 @@ objects:
   Invoice:
     primary: invoice
     properties:
-      total: {column: invoice.total, type: decimal}
+      total: {column: invoice.total, type: decimal, quantity: extensive}
   InvoiceLine:
     primary: invoice_line
     properties:
-      quantity: {column: invoice_line.quantity, type: integer}
+      quantity: {column: invoice_line.quantity, type: integer, quantity: extensive}
   Employee:
     primary: employee
     joins:
@@ -176,7 +176,12 @@ def lite_metadata():
         Column("name", String, nullable=False),
     )
     Table("track", md, Column("track_id", Integer, primary_key=True, nullable=False),
-          Column("name", String, nullable=False), Column("album_id", Integer))
+          Column("name", String, nullable=False), Column("album_id", Integer),
+          # Present in the real chinook schema, and needed here so the quantity
+          # rule can be exercised against a rate (unit_price) and an extensive
+          # quantity (milliseconds) rather than an invented column.
+          Column("unit_price", Numeric, nullable=False),
+          Column("milliseconds", Integer, nullable=False))
     Table("playlist", md, Column("playlist_id", Integer, primary_key=True, nullable=False),
           Column("name", String))  # playlist.name is nullable in chinook
     Table("playlist_track", md, Column("playlist_id", Integer, nullable=False),

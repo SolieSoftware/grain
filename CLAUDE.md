@@ -99,11 +99,21 @@ inflated. That is exactly defect C5. Prefer the oracle.
 `tests/integration/test_shared_limits.py` proves what neither engine can do. If
 you think you have fixed one, you must delete a test, not just assert it.
 
-The sharpest: **grain validates a metric's *grain*, not whether the *quantity*
-is additive by nature.** `sum(track.unit_price)` is arithmetically perfect,
-reported `additive: true`, and answers no useful question. Prices, rates,
-ratios, running balances — all sum cleanly, none should. Fixing this needs a new
-ontology field, not a new aggregate technique.
+**Fixed, and the test was deleted rather than inverted.** grain used to validate
+a metric's *grain* — that its rows are not replicated — with no concept of
+whether the *quantity* accumulated, so `sum(track.unit_price)` came back perfect
+and meaningless. A property now declares `quantity: extensive | rate | ratio`
+and the loader refuses a `sum` over one that does not accumulate.
+
+The rule is deliberately narrow: it inspects a summed value only when that value
+is a BARE column. `sum(a * b)` is left alone, because a rate times a count IS
+extensive — `revenue` is exactly that shape, and a cruder rule would refuse it.
+Opaque `expr` metrics are skipped entirely; nothing can tell whether they sum.
+
+Still open: **semi-additive** quantities (a balance, an inventory level) that
+sum across accounts but not across time. dbt's MetricFlow models this with
+`non_additive_dimension`; grain has no time-dimension concept, so this needs a
+subsystem rather than a field.
 
 Also standing: the symmetric encoding's `|v| < 5e29` bound is checked only at
 load, so data written later can cross it silently. This is the design's weakest

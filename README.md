@@ -325,17 +325,18 @@ limit in the BI literature, measured here against chinook.
 
 | Limitation | What happens |
 |---|---|
-| **A quantity that was never additive** | `sum(track.unit_price)` is arithmetically perfect and semantically meaningless. Both engines report `additive: true`, no caveat. **The most dangerous case, because nothing looks wrong.** |
+| ~~A quantity that was never additive~~ | **Fixed.** A property declares `quantity: extensive \| rate \| ratio`, and the loader refuses a `sum` over one that does not accumulate. Only bare-column values are inspected, so `sum(price * qty)` stays legal. |
+| **Semi-additive quantities** | A balance sums across accounts but not across time. grain has no time-dimension concept, so it cannot express the constraint. |
 | **Overlapping groups** | Revenue by playlist sums to 5738.28 against a true 2328.60. Both flag `additive: false`; neither can give a correct total. |
 | **Branching traversal** | `traverse` is a path, not a tree, so the chasm trap is inexpressible. Both refuse — with an error that describes a chain, not the branch that was asked for. |
 | **Medians and percentiles** | No distinct-sum rewrite exists, so `AggFunc` offers none. As an opaque `expr` the subquery engine answers; the symmetric engine refuses. |
 | **`limit` without `order_by`** | Arbitrary rows, legally. The two engines may return *different* rows for one spec — the only place their output may differ without either being wrong. |
 
-The first is the honest headline. grain validates a metric's **grain** — that its
-rows are not replicated — and has no concept of whether the **quantity** is
-additive by nature. A price, a rate, a ratio, a running balance: all sum
-cleanly, none should. No aggregate technique fixes that, because it is the wrong
-operation on the right rows.
+grain validates a metric's **grain** — that its rows are not replicated — and
+now also whether the **quantity** accumulates at all. That second check is a
+declaration, not an aggregate technique: no amount of clever SQL can tell you a
+price should not be totalled, so the ontology has to say it and the loader has
+to enforce it.
 
 ### The engines check each other
 

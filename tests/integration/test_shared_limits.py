@@ -76,53 +76,47 @@ def test_both_engines_agree_on_the_unusable_total(engines):
 
 
 # --------------------------------------------------------------------------
-# 2. A quantity that was never additive. The worst case: silently wrong.
+# 2. A quantity that was never additive — NO LONGER A LIMITATION.
 # --------------------------------------------------------------------------
+#
+# This section used to hold `test_neither_engine_knows_a_price_is_not_a_quantity`,
+# which proved that `sum(track.unit_price)` came back arithmetically perfect,
+# flagged `additive: true`, and answered no question — in BOTH engines, with no
+# caveat anywhere. It was the sharpest limitation here and the most dangerous,
+# because nothing about the output looked wrong.
+#
+# It is fixed. A `quantity` declaration on the property now says whether the
+# number accumulates, and the loader refuses a metric that sums one which does
+# not. The test was DELETED rather than inverted, which is this repo's stated
+# bar for claiming a pinned limitation is closed. What replaced it lives in
+# tests/unit/test_quantity_kind.py, and the one below proves the refusal
+# reaches the facade in both engines.
+
 
 @pytest.mark.parametrize("which", ["subquery", "symmetric"])
-def test_neither_engine_knows_a_price_is_not_a_quantity(which, db_engine):
-    """`sum(track.unit_price)` is arithmetically correct and semantically
-    meaningless, and BOTH engines report it `additive: true` with no caveat.
+def test_a_metric_summing_a_rate_is_refused_before_either_engine_sees_it(
+    which, db_engine
+):
+    """The check sits in the loader, below the engine seam, so neither engine
+    can be handed such a metric in the first place."""
+    from grain.engine.ontology import ObjectType, Property
 
-    This is the sharpest shared limitation, and the most dangerous, because
-    nothing about the output looks wrong. grain validates the GRAIN of a metric
-    — that its rows are not replicated — and has no concept of whether the
-    QUANTITY is additive by nature. A price, a rate, a ratio, a temperature, a
-    running balance: all of them sum cleanly and none of them should.
-
-    The literature calls these non-additive and semi-additive measures. No
-    distinct-sum rewrite helps, because the rewrite fixes double-counting and
-    this was never double-counted — it was the wrong operation on the right
-    rows.
-    """
     g = Grain.load(CHINOOK_DIR, db_engine, engine_name=which)
-    g.ontology.metrics["price_sum"] = Metric(
+    onto = g.ontology.model_copy(deep=True)
+    onto.objects["Track"] = ObjectType(
+        name="Track", primary="track",
+        properties={"unit_price": Property(column="track.unit_price",
+                                           type="decimal", quantity="rate")},
+    )
+    onto.metrics["price_sum"] = Metric(
         name="price_sum", grain="track", type="decimal",
         agg="sum", value="track.unit_price")
-    try:
-        result = g.query(QuerySpec(
-            object="Album", traverse=[Hop(link="Album_Tracks")],
-            group_by=["title"], metrics=["price_sum"],
-            filters=[], limit=None))
-    finally:
-        del g.ontology.metrics["price_sum"]
 
-    by_title = {r[0]: r[1] for r in result.rows}
-    with db_engine.connect() as conn:
-        truth = {r[0]: r[1] for r in conn.execute(text(
-            "select a.title, sum(t.unit_price) from album a"
-            " join track t on t.album_id = a.album_id group by a.title"))}
+    from grain.engine.errors import OntologyError
+    from grain.engine.loader import validate
 
-    # Arithmetically flawless...
-    assert by_title == truth
-    # ...and presented without a single caveat, which is the problem.
-    #
-    # NOT asserted: that no rewrite is reported. The symmetric engine correctly
-    # reports one — it encoded the sum, because Album_Tracks fans — and that
-    # rewrite is about REPLICATION, which it handled. Nothing in either engine's
-    # output has anything to say about the sum being the wrong operation.
-    assert result.additive is True
-    assert result.non_additive_reason is None
+    with pytest.raises(OntologyError, match="does not accumulate"):
+        validate(onto, g.metadata)
 
 
 # --------------------------------------------------------------------------

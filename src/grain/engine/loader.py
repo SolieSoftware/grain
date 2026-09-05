@@ -9,7 +9,15 @@ import yaml
 from sqlalchemy import Engine, MetaData, UniqueConstraint, text
 
 from .errors import OntologyError
-from .ontology import ColumnRef, Metric, ObjectType, Ontology, Property, TableJoin
+from .ontology import (
+    ACCUMULATES,
+    ColumnRef,
+    Metric,
+    ObjectType,
+    Ontology,
+    Property,
+    TableJoin,
+)
 
 _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 
@@ -418,6 +426,8 @@ def validate(
     for metric in onto.metrics.values():
         _validate_metric_expr(metric, metadata)
 
+    _check_quantity_kinds(onto)
+
     if engine is not None:
         _check_symmetric_headroom(onto, metadata, engine)
 
@@ -465,3 +475,71 @@ def _check_symmetric_headroom(
                     f"symmetric encoding's bound of {BOUND}. Use only the "
                     f"'subquery' engine for it, or reduce its magnitude."
                 )
+
+# A value that is nothing but one `table.column` reference. The quantity check
+# applies ONLY to this shape -- see `_check_quantity_kinds`.
+BARE_COLUMN = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)\s*$")
+
+
+def _property_for_column(onto: Ontology, table: str, column: str):
+    """The declared property reading this column, if any object declares one."""
+    for obj in onto.objects.values():
+        for name, prop in obj.properties.items():
+            if (prop.column.table.lower() == table.lower()
+                    and prop.column.column.lower() == column.lower()):
+                return f"{obj.name}.{name}", prop
+    return None, None
+
+
+def _check_quantity_kinds(onto: Ontology) -> None:
+    """A quantity that does not accumulate may not be summed.
+
+    grain validates a metric's GRAIN -- that its rows are not replicated -- and
+    had no concept of whether the QUANTITY was additive by nature.
+    `sum(track.unit_price)` was arithmetically perfect, reported
+    `additive: true`, and answered no useful question.
+
+    NARROW ON PURPOSE: only a summed value that is a BARE column reference is
+    inspected. `sum(a * b)` is left alone, because a rate multiplied by a count
+    genuinely IS extensive -- `revenue` is `sum(unit_price * quantity)`, exactly
+    that shape, and a cruder rule would refuse grain's flagship metric. Doing
+    the algebra properly would mean an expression evaluator; declaring the
+    composite's kind is the author's job, and writing the product is them doing
+    it.
+
+    Opaque `expr` metrics are skipped. They are not decomposed, so nothing here
+    can tell whether they sum, and sniffing for `sum(` with a regex is the kind
+    of fragility this file exists to avoid. Recorded as a known limit rather
+    than papered over.
+    """
+    for metric in onto.metrics.values():
+        if metric.agg != "sum" or not metric.value:
+            continue
+        match = BARE_COLUMN.match(metric.value)
+        if match is None:
+            continue
+        table, column = match.group(1), match.group(2)
+        ctx = f"metric '{metric.name}' sums '{table}.{column}'"
+
+        name, prop = _property_for_column(onto, table, column)
+        if prop is None:
+            raise OntologyError(
+                f"{ctx}, which has no declared property, so there is nowhere to "
+                f"say whether that quantity accumulates. Declare a property for "
+                f"it with an explicit 'quantity'."
+            )
+        if prop.quantity is None:
+            raise OntologyError(
+                f"{ctx}, but '{name}' does not declare a 'quantity'. Summing is "
+                f"only meaningful for a quantity that accumulates, so say which "
+                f"it is: extensive (money, counts, durations), rate (a price, a "
+                f"speed) or ratio (a percentage, a share)."
+            )
+        if prop.quantity not in ACCUMULATES:
+            raise OntologyError(
+                f"{ctx}, which '{name}' declares a {prop.quantity}. A "
+                f"{prop.quantity} does not accumulate -- summing it produces a "
+                f"number with no referent, however correct the arithmetic. "
+                f"Alternatives: use agg avg, min or max; or measure an extensive "
+                f"quantity instead."
+            )

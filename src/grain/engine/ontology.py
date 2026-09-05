@@ -14,6 +14,25 @@ FANNING: frozenset[str] = frozenset({"one_to_many", "many_to_many"})
 
 AggFunc = Literal["sum", "count", "count_distinct", "min", "max", "avg"]
 
+QuantityKind = Literal["extensive", "rate", "ratio"]
+
+ACCUMULATES: frozenset[str] = frozenset({"extensive"})
+"""Kinds that may be summed.
+
+An EXTENSIVE quantity scales with the size of the set it is measured over --
+money, counts, durations. Adding two of them yields a quantity of the same kind,
+which is what makes a total mean anything.
+
+A RATE is per-unit (a price, a speed) and a RATIO is a proportion (a percentage,
+a share). Neither accumulates: summing prices produces a number with no
+referent, and summing percentages can exceed 100. They can be averaged,
+minimised and maximised perfectly well -- only `sum` is refused.
+
+The distinction is not decoration. `grain` validates a metric's GRAIN -- that
+its rows are not replicated -- and had no way to say whether the QUANTITY was
+additive at all, so `sum(track.unit_price)` came back arithmetically perfect,
+flagged `additive: true`, and answered no question."""
+
 FANOUT_IMMUNE: frozenset[str] = frozenset({"min", "max", "count_distinct"})
 """Aggregates that row replication cannot change.
 
@@ -103,7 +122,12 @@ class AiContext(BaseModel):
 
 
 class Property(BaseModel):
-    """`unique: true` declares that this property identifies ONE row of its
+    """`quantity` declares what KIND of number this is, so the loader can refuse
+    a metric that sums something which does not accumulate. Required only on a
+    column some `sum` metric actually reads -- a name or a country is never
+    summed and needs nothing said about it.
+
+    `unique: true` declares that this property identifies ONE row of its
     object — a claim `loader.py` checks against the database's primary key and
     unique constraints, never merely accepts.
 
@@ -119,6 +143,7 @@ class Property(BaseModel):
     type: ValueType
     nullable: bool = False
     unique: bool = False
+    quantity: QuantityKind | None = None
     via: str | None = None
     description: str | None = None
 

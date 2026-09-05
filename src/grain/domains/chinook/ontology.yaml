@@ -41,7 +41,7 @@ objects:
       name: {column: track.name, type: string}
       composer: {column: track.composer, type: string, nullable: true}
       duration_ms: {column: track.milliseconds, type: integer}
-      unit_price: {column: track.unit_price, type: decimal}
+      unit_price: {column: track.unit_price, type: decimal, quantity: rate}
       genre: {column: genre.name, type: string, via: genre, nullable: true}
       media_type: {column: media_type.name, type: string, via: media_type, nullable: true}
 
@@ -97,15 +97,15 @@ objects:
     properties:
       invoice_date: {column: invoice.invoice_date, type: datetime}
       billing_country: {column: invoice.billing_country, type: string, nullable: true}
-      total: {column: invoice.total, type: decimal}
+      total: {column: invoice.total, type: decimal, quantity: extensive}
 
   InvoiceLine:
     primary: invoice_line
     description: >
       One line of a purchase — a single track, its price and quantity. The grain at which revenue is measured.
     properties:
-      unit_price: {column: invoice_line.unit_price, type: decimal}
-      quantity: {column: invoice_line.quantity, type: integer}
+      unit_price: {column: invoice_line.unit_price, type: decimal, quantity: rate}
+      quantity: {column: invoice_line.quantity, type: integer, quantity: extensive}
 
   Employee:
     primary: employee
