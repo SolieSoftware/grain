@@ -134,6 +134,16 @@ the engine never imports upward.
 **It has never made a real API call.** No credential was available on the
 machine it was built on. Treat first use as the real test.
 
+## What this taught
+
+`docs/FINDINGS.md` records the difficulties and their resolutions — written
+while the work was happening, not reconstructed afterwards. Read it before
+modelling a new dataset: the shapes recur under different names, and several
+entries are mistakes made twice before being understood once.
+
+Add to it as you go. An entry is: what was believed, what turned out to be true,
+what it cost.
+
 ## Conventions
 
 - Python 3.12+, SQLAlchemy 2.x (`select()` style only), Pydantic v2, psycopg 3.

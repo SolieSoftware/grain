@@ -450,6 +450,14 @@ up to 10²⁸.
   *computed* correctly. It cannot guarantee the *right question was asked* — if two
   metrics both sound like "revenue", only prose in `ai_context` distinguishes them.
 
+## What this taught
+
+[`docs/FINDINGS.md`](docs/FINDINGS.md) — the difficulties and their resolutions,
+written as the work happened. Verification traps, modelling gaps, encoding
+trade-offs, and the places an elegant invariant turned out not to be the
+load-bearing one. Written to transfer to other datasets rather than to describe
+this one.
+
 ## Design notes
 
 The full design, its corrections, and a postmortem of the mistakes made building it
