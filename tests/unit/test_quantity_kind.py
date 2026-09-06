@@ -144,14 +144,27 @@ def test_a_metric_may_declare_its_own_quantity(lite_metadata):
     it: count_distinct(employee_id) has no quantity column, because employee_id
     is an identifier.
 
+    Asserted through the LOADER, not by reading `m.quantity` back. That earlier
+    form merely echoed a Pydantic field: it passed whether or not anything in
+    the loader consulted a metric-level quantity, which is the only thing the
+    declaration is for. `_effective_quantity` is what the rules actually read.
+
     `over_time` is required alongside `quantity: stock` (see test_stock.py) --
     named here with a dimension that need not resolve to anything, since this
     test never calls `validate()` and so never reaches the ontology check."""
+    from grain.engine.loader import _effective_quantity
+
     m = Metric(name="headcount", grain="employee", type="integer",
                agg="count_distinct", value="employee.employee_id",
                quantity="stock",
                over_time={"dimension": "hire_date", "choice": "last"})
-    assert m.quantity == "stock"
+    onto = _onto(m)
+    kind, source = _effective_quantity(onto, onto.metrics["headcount"])
+    assert kind == "stock"
+    # No property reads `employee_id`, and the value is not even on the object
+    # this ontology declares -- so nothing but the metric itself could have
+    # supplied this.
+    assert source == "metric 'headcount'"
 
 
 def test_a_metric_quantity_beats_the_property(lite_metadata):
