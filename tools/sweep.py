@@ -13,10 +13,16 @@ from decimal import Decimal
 from sqlalchemy import create_engine
 
 from grain.domains.chinook import CHINOOK_DIR
+from grain.domains.chinook_inventory import INVENTORY_DIR
 from grain.engine.api import Grain
 from grain.engine.errors import GrainError
 from grain.engine.spec import Hop, QuerySpec
 from oracle import METRICS, OBJECT_TABLE, answer, Db
+
+# Which pack each root object is declared in. `Inventory` is not in chinook: it
+# describes a table `tools/seed_inventory.py` creates, and a pack that named a
+# table the database may not have would refuse to load at all.
+DOMAIN = {"Inventory": INVENTORY_DIR}
 
 # root object -> list of (link path, table each hop lands on)
 PATHS = [
@@ -36,6 +42,10 @@ PATHS = [
     ("Track", ["Track_InvoiceLines"]),
     ("Track", ["Track_Album"]),
     ("Invoice", ["Invoice_Lines"]),
+    # A stock, which only the subquery engine can serve. Enumerated anyway: the
+    # oracle is the only independent judge of it, so the one comparison this
+    # row makes is the one that matters.
+    ("Inventory", []),
 ]
 
 # root object -> (spec group_by key, (oracle table, column))
@@ -53,6 +63,8 @@ GROUP_KEYS = {
     "Album": [("title", ("album", "title"))],
     "Track": [("name", ("track", "name"))],
     "Invoice": [("billing_country", ("invoice", "billing_country"))],
+    "Inventory": [("as_of", ("daily_inventory", "as_of_date")),
+                  ("track", ("daily_inventory", "track_id"))],
 }
 
 
@@ -68,14 +80,29 @@ def main():
     db_engine = create_engine(os.environ["GRAIN_DATABASE_URL"])
     with db_engine.connect() as conn:
         db = Db(conn)
-    sub = Grain.load(CHINOOK_DIR, db_engine, engine_name="subquery")
-    sym = Grain.load(CHINOOK_DIR, db_engine, engine_name="symmetric")
+    loaded: dict[tuple, Grain] = {}
+
+    def grain_for(root, engine_name):
+        """One Grain per (pack, engine). Packs beyond chinook exist because a
+        pack may only name tables the database actually has."""
+        key = (DOMAIN.get(root, CHINOOK_DIR), engine_name)
+        if key not in loaded:
+            loaded[key] = Grain.load(key[0], db_engine, engine_name=key[1])
+        return loaded[key]
 
     tally = Counter()
     problems = []
     total = 0
+    skipped = []
 
     for root, links in PATHS:
+        try:
+            sub = grain_for(root, "subquery")
+            sym = grain_for(root, "symmetric")
+        except GrainError as exc:
+            # An optional pack whose table has not been seeded.
+            skipped.append(f"{root}: {exc}")
+            continue
         reachable = {OBJECT_TABLE[root]}
         for link in links:
             from oracle import LINKS
@@ -86,6 +113,12 @@ def main():
                 continue
             for metric, (grain_tbl, _, _) in METRICS.items():
                 if grain_tbl not in reachable:
+                    continue
+                # The oracle knows metrics the packs do not declare —
+                # `opening_level` is built on the fly by the stock anchors.
+                # Enumerating one would report a pair of UnknownName refusals
+                # as though the engines had disagreed with something.
+                if metric not in sub.ontology.metrics:
                     continue
                 total += 1
                 spec = QuerySpec(object=root,
@@ -130,6 +163,8 @@ def main():
                     problems.append(("WRONG", label, wrong))
 
     print(f"{total} enumerated (root, path, group key, metric) combinations\n")
+    for line in skipped:
+        print(f"  skipped  {line}")
     for k, v in tally.most_common():
         print(f"  {v:>4}  {k}")
     if problems:

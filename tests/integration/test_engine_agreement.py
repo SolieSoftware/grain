@@ -15,7 +15,7 @@ import pytest
 
 from grain.domains.chinook import CHINOOK_DIR
 from grain.engine.api import Grain
-from grain.engine.errors import GrainError
+from grain.engine.errors import GrainError, OntologyError
 from tests.corpus import CORPUS, DIVERGENT
 
 pytestmark = pytest.mark.integration
@@ -63,18 +63,34 @@ def test_both_engines_agree_on_additivity(name, spec, engines):
     assert sym.query(spec).additive == sub.query(spec).additive
 
 
-@pytest.mark.parametrize(
-    "name,spec,why", DIVERGENT, ids=[c[0] for c in DIVERGENT]
-)
-def test_the_recorded_divergences_are_real_and_one_directional(name, spec, why, engines):
-    """Every divergence must be the SAME direction: subquery refuses, symmetric
-    answers. A divergence the other way would mean the new engine lost a
-    capability, which nothing here intends."""
-    sub, sym = engines
+@pytest.mark.parametrize("d", DIVERGENT, ids=[d.name for d in DIVERGENT])
+def test_the_recorded_divergences_are_real_and_in_the_recorded_direction(d, db_engine):
+    """A recorded divergence must actually diverge, and in the direction the
+    record claims: the named engine refuses, the other answers.
+
+    This used to assert ONE fixed direction — subquery refuses, symmetric
+    answers — on the reasoning that the other way round would mean the newer
+    engine had lost a capability, which nothing intended. `stock` is exactly
+    that, deliberately: the window needs a window function inside a subquery
+    and the symmetric engine is defined as one pass. So the direction is
+    recorded per entry now. Asserting it is still the point — an entry that
+    stopped diverging, or started diverging the other way, is a change nobody
+    declared.
+    """
+    pair = {}
+    for name in ("subquery", "symmetric"):
+        try:
+            pair[name] = Grain.load(d.domain, db_engine, engine_name=name)
+        except OntologyError as exc:
+            # The stock entry's pack describes a table `tools/seed_inventory.py`
+            # creates. Unseeded is a supported state, so skip rather than fail.
+            pytest.skip(f"{d.domain.name} does not load: {exc}")
+
     with pytest.raises(GrainError):
-        sub.query(spec)
-    result = sym.query(spec)
-    assert result.rows, f"{name}: symmetric should answer this ({why})"
+        pair[d.refuses].query(d.spec)
+    answers = "symmetric" if d.refuses == "subquery" else "subquery"
+    assert pair[answers].query(d.spec).rows, \
+        f"{d.name}: {answers} should answer this ({d.why})"
 
 
 def test_the_corpus_actually_exercises_both_strategies(engines):
