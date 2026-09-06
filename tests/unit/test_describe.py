@@ -171,6 +171,26 @@ def test_the_stock_refusals_are_published(chinook_lite):
     assert "symmetric" in rule and "default engine" in rule
 
 
+def test_the_stock_rule_claims_only_what_is_enforced(chinook_lite):
+    """It used to assert as fact that "a metric's own description says whether
+    it is a level". Nothing checks that an author wrote it, and `quantity` and
+    `over_time` are deliberately unpublished (the test below pins that), so a
+    level whose description is silent left the agent with no signal at all.
+
+    What IS mechanical is the additivity verdict on a grouped level, which
+    `agent/tools.py` turns into a caveat carried by the data. The rule now
+    points at that and calls the description a convention. A guarantee claimed
+    but not held is worse than none — this branch already shipped one."""
+    from grain.engine.describe import describe
+
+    rule = describe(chinook_lite)["rules"]["stock_metrics"]
+    assert "NOT ADDITIVE" in rule
+    assert "nothing enforces" in rule
+    # The retracted claim, pinned by its absence: restoring it must be a
+    # deliberate act, and would need something to enforce it first.
+    assert "description says whether it is a level" not in rule
+
+
 def test_the_stock_rule_does_not_smuggle_in_a_per_metric_field(chinook_lite):
     """The rule is stated ONCE, as prose about query shape (S1). It deliberately
     does NOT publish `quantity` or `over_time` per metric: that a metric is a

@@ -114,9 +114,14 @@ STOCK_METRIC_RULE = (
     "another way: two such metrics in one query, one such metric alongside any "
     "other metric, and one reached over a path that fans out beyond its grain "
     "without a unique group_by key pinning that fan. Ask for a level metric on "
-    "its own, and put the other metrics in a second query. A metric's own "
-    "description says whether it is a level; the 'symmetric' engine refuses all "
-    "of them, so use the default engine."
+    "its own, and put the other metrics in a second query. A GROUPED level comes "
+    "back marked NOT ADDITIVE, because each group windows to its own instant: "
+    "every group is correct and their total is a level at no instant, so never "
+    "total one. That flag is the dependable signal and it travels with the "
+    "result. A level metric SHOULD also say so in its own description, but "
+    "nothing enforces that it does, so silence there is not evidence that a "
+    "metric is not a level. The 'symmetric' engine refuses all of them, so use "
+    "the default engine."
 )
 """Published because these three refusals are the only ones an agent cannot
 anticipate from anything else `describe()` shows it. Every other refusal follows
@@ -128,9 +133,21 @@ better.
 Prose, and one rule, for the S1 reason above: the refusals are properties of the
 query's shape, not of a `(metric x dimension)` pair, so an agent that knows the
 shape rule can repair any of the three without being told in advance which
-metrics are levels. That a metric IS one is already carried by its own
-`description` and `ai_context` -- `inventory_level` says "Never summed across
-dates" -- which is where a semantic fact about one metric belongs. Publishing
+metrics are levels. That a metric IS one is carried by its own `description` and
+`ai_context` -- `inventory_level` says "Never summed across dates" -- which is
+where a semantic fact about one metric belongs.
+
+The rule used to state that as a fact. It is not one: nothing checks that an
+author wrote it, `quantity` and `over_time` are deliberately unpublished (pinned
+by `test_the_stock_rule_does_not_smuggle_in_a_per_metric_field`), and a level
+whose description happens not to mention it leaves an agent with no textual
+signal at all. What IS mechanical is the additivity verdict: a grouped level is
+reported non-additive, with its reason, and `agent/tools.py` turns that into a
+caveat carried by the data. So the rule now says the flag is the dependable
+signal and the description is a convention -- a guarantee claimed but not held
+is worse than none, and this branch already shipped one. Backlog item 6
+(publishing the field) would make the textual half enforceable; until then it is
+a convention, and named as one. Publishing
 `quantity` as a metric key instead would be a deliberate change to
 `test_does_not_enumerate_metric_dimension_pairs`, and would still need this rule
 to say what follows from it."""
