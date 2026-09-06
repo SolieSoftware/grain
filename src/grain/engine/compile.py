@@ -43,6 +43,14 @@ _START = "__grain_start"
 _DEPTH = "__grain_depth"
 _PATH = "__grain_path"
 
+# Bookkeeping columns on the window-to-boundary wrap (`_window_to_boundary`).
+# Same double-underscore reservation, same reason: the wrap re-exposes the
+# metric's grain table under its own column names, and a table with a `value`
+# or `t` or `pick` column would otherwise be shadowed silently.
+_GRAIN_VALUE = "__grain_value"
+_GRAIN_T = "__grain_t"
+_GRAIN_PICK = "__grain_pick"
+
 
 def sql_text(stmt: Select[Any]) -> str:
     """Render SQL with literal binds — for logging, provenance and tests."""
@@ -767,7 +775,7 @@ def _window_to_boundary(
       `scope.column(rp)` still resolves fine here, before the wrap, since this
       function runs first; `compile_query` cannot use it again afterward.
     - the metric's own per-row VALUE (not yet aggregated), under the reserved
-      name `__grain_value` -- `metric.sql_expr` is `agg(value)`, and applying
+      name `_GRAIN_VALUE` -- `metric.sql_expr` is `agg(value)`, and applying
       `agg` again has to happen in the OUTER query, over the rows this window
       has just restricted to one instant, which is the entire point.
 
@@ -803,11 +811,11 @@ def _window_to_boundary(
     # removes the collision instead of hoping around it.
     inner = stmt.with_only_columns(
         *[scope.column(rp).label(rp.name) for rp in rq.group_by],
-        literal_column(metric.value).label("__grain_value"),
-        time_col.label("__grain_t"),
-        pick(time_col).over(partition_by=partition).label("__grain_pick"),
+        literal_column(metric.value).label(_GRAIN_VALUE),
+        time_col.label(_GRAIN_T),
+        pick(time_col).over(partition_by=partition).label(_GRAIN_PICK),
     ).subquery(name=f"{metric.name}_at_boundary")
-    return select(inner).where(inner.c["__grain_t"] == inner.c["__grain_pick"])
+    return select(inner).where(inner.c[_GRAIN_T] == inner.c[_GRAIN_PICK])
 
 
 def _reaggregate(metric: Metric, value: ColumnElement[Any]) -> ColumnElement[Any]:
@@ -853,6 +861,32 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
                 ["ask for them in separate queries"],
             )
         window_mp = windowed[0]
+        if len(plan.metric_plans) > 1:
+            # `_window_to_boundary` re-exposes only THIS metric's value through
+            # the wrap. Every other metric still renders as `_metric_column`'s
+            # raw text naming its own physical table -- a table `with_only_
+            # columns` has just removed from the outer FROM. Best case that
+            # raises `UndefinedTable` (a bare column reference); worst case, an
+            # opaque `expr` metric naming no table at all (`count(*)`) compiles
+            # and runs, silently aggregating over the handful of boundary rows
+            # instead of the real population -- plausible, wrong, and nothing
+            # about it looks wrong. Refused rather than risking either.
+            others = sorted(
+                mp.metric.name for mp in plan.metric_plans if mp is not window_mp
+            )
+            raise GrainError(
+                f"'{window_mp.metric.name}' is a stock windowed to one "
+                f"instant, and this query also asks for {others}. The window "
+                f"wraps the whole statement and exposes only the windowed "
+                f"metric's own value through it, so any other metric would "
+                f"either name a table the wrap has removed from FROM, or -- "
+                f"for an opaque expr naming no table -- silently aggregate "
+                f"over just the boundary rows instead of the real population.",
+                [
+                    f"ask for '{window_mp.metric.name}' in a query by itself",
+                    "ask for the other metrics in a separate query",
+                ],
+            )
         if window_mp.strategy == "aggregate_then_join":
             # The window only restricts THIS statement's own rows.
             # `aggregate_then_join` pre-aggregates this metric in an entirely
@@ -887,7 +921,7 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
     rewritten = [mp for mp in plan.metric_plans if mp.strategy == "aggregate_then_join"]
     inline_cols = [
         (
-            _reaggregate(mp.metric, stmt.selected_columns["__grain_value"])
+            _reaggregate(mp.metric, stmt.selected_columns[_GRAIN_VALUE])
             .label(mp.metric.name)
             if mp.window is not None
             else _metric_column(mp.metric)
