@@ -532,14 +532,14 @@ def _check_quantity_kinds(onto: Ontology) -> None:
             raise OntologyError(
                 f"{ctx}, but '{name}' does not declare a 'quantity'. Summing is "
                 f"only meaningful for a quantity that accumulates, so say which "
-                f"it is: extensive (money, counts, durations), rate (a price, a "
-                f"speed) or ratio (a percentage, a share)."
+                f"it is: flow (money, counts, durations), stock (a level at an "
+                f"instant) or value_per_unit (a price, a rate, a percentage)."
             )
         if prop.quantity not in ACCUMULATES:
             raise OntologyError(
                 f"{ctx}, which '{name}' declares a {prop.quantity}. A "
                 f"{prop.quantity} does not accumulate -- summing it produces a "
                 f"number with no referent, however correct the arithmetic. "
-                f"Alternatives: use agg avg, min or max; or measure an extensive "
+                f"Alternatives: use agg avg, min or max; or measure a flow "
                 f"quantity instead."
             )

@@ -13,11 +13,11 @@ objects:
   Invoice:
     primary: invoice
     properties:
-      total: {column: invoice.total, type: decimal, quantity: extensive}
+      total: {column: invoice.total, type: decimal, quantity: flow}
   InvoiceLine:
     primary: invoice_line
     properties:
-      quantity: {column: invoice_line.quantity, type: integer, quantity: extensive}
+      quantity: {column: invoice_line.quantity, type: integer, quantity: flow}
   Employee:
     primary: employee
     joins:

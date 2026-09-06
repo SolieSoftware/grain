@@ -25,7 +25,7 @@ def _onto(metric: Metric, quantity: str | None = None, **prop_kw) -> Ontology:
         "unit_price": Property(column="track.unit_price", type="decimal",
                                quantity=quantity, **prop_kw),
         "duration_ms": Property(column="track.milliseconds", type="integer",
-                                quantity="extensive"),
+                                quantity="flow"),
     }
     return Ontology(
         name="t",
@@ -40,10 +40,21 @@ def _sum(value: str, name: str = "m") -> Metric:
 
 # -- the vocabulary itself ---------------------------------------------------
 
-@pytest.mark.parametrize("kind", ["extensive", "rate", "ratio"])
+@pytest.mark.parametrize("kind", ["flow", "stock", "value_per_unit"])
 def test_the_three_declarable_kinds(kind):
     assert Property(column="track.unit_price", type="decimal",
                     quantity=kind).quantity == kind
+
+
+@pytest.mark.parametrize("old", ["extensive", "rate", "ratio"])
+def test_the_old_vocabulary_is_refused(old):
+    """No alias mapping. A value that silently mapped from an old name to a new
+    one is the quiet accommodation this codebase avoids — the ontology author
+    should see the error and choose."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Property(column="track.unit_price", type="decimal", quantity=old)
 
 
 def test_an_unknown_kind_is_refused_at_declaration():
@@ -59,27 +70,23 @@ def test_quantity_is_optional_so_most_properties_need_no_annotation():
 
 # -- the rule ----------------------------------------------------------------
 
-def test_summing_an_extensive_column_is_allowed(lite_metadata):
-    validate(_onto(_sum("track.milliseconds"), quantity="extensive"), lite_metadata)
+def test_summing_a_flow_column_is_allowed(lite_metadata):
+    validate(_onto(_sum("track.milliseconds"), quantity="flow"), lite_metadata)
 
 
-def test_summing_a_rate_is_refused(lite_metadata):
+def test_summing_a_value_per_unit_is_refused(lite_metadata):
     """The case this whole feature exists for."""
     with pytest.raises(OntologyError, match="does not accumulate"):
-        validate(_onto(_sum("track.unit_price"), quantity="rate"), lite_metadata)
-
-
-def test_summing_a_ratio_is_refused(lite_metadata):
-    with pytest.raises(OntologyError, match="does not accumulate"):
-        validate(_onto(_sum("track.unit_price"), quantity="ratio"), lite_metadata)
+        validate(_onto(_sum("track.unit_price"), quantity="value_per_unit"),
+                 lite_metadata)
 
 
 def test_the_refusal_names_what_to_do_instead(lite_metadata):
     """Every error in this codebase names a legal alternative."""
     with pytest.raises(OntologyError) as exc:
-        validate(_onto(_sum("track.unit_price"), quantity="rate"), lite_metadata)
+        validate(_onto(_sum("track.unit_price"), quantity="value_per_unit"), lite_metadata)
     message = str(exc.value)
-    assert "rate" in message
+    assert "value_per_unit" in message
     assert "avg" in message and "min" in message and "max" in message
 
 
@@ -92,7 +99,7 @@ def test_summing_an_undeclared_column_is_refused(lite_metadata):
 
 def test_summing_a_column_with_no_property_at_all_is_refused(lite_metadata):
     """There is nowhere to put the declaration, so the model is incomplete."""
-    onto = _onto(_sum("track.album_id"), quantity="extensive")  # album_id has no property
+    onto = _onto(_sum("track.album_id"), quantity="flow")  # album_id has no property
     with pytest.raises(OntologyError, match="no declared property"):
         validate(onto, lite_metadata)
 
@@ -103,7 +110,7 @@ def test_summing_a_product_of_a_rate_and_a_count_is_allowed(lite_metadata):
     """`revenue` is `sum(unit_price * quantity)`. A rate times a count IS
     extensive, so a rule that refused every sum touching a rate would refuse
     grain's flagship metric. Only BARE column references are inspected."""
-    onto = _onto(_sum("track.unit_price * track.milliseconds"), quantity="rate")
+    onto = _onto(_sum("track.unit_price * track.milliseconds"), quantity="value_per_unit")
     validate(onto, lite_metadata)
 
 
@@ -112,7 +119,7 @@ def test_a_non_sum_aggregate_over_a_rate_is_allowed(lite_metadata):
     for agg in ("avg", "min", "max"):
         m = Metric(name="m", grain="track", type="decimal", agg=agg,
                    value="track.unit_price")
-        validate(_onto(m, quantity="rate"), lite_metadata)
+        validate(_onto(m, quantity="value_per_unit"), lite_metadata)
 
 
 def test_an_opaque_expr_metric_is_skipped(lite_metadata):
@@ -121,7 +128,7 @@ def test_an_opaque_expr_metric_is_skipped(lite_metadata):
     is exactly the fragility this codebase avoids."""
     m = Metric(name="m", grain="track", type="decimal",
                expr="sum(track.unit_price)")
-    validate(_onto(m, quantity="rate"), lite_metadata)
+    validate(_onto(m, quantity="value_per_unit"), lite_metadata)
 
 
 def test_the_real_chinook_pack_still_loads(chinook_lite):

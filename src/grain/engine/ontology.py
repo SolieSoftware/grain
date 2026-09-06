@@ -16,24 +16,28 @@ AggFunc = Literal[
     "sum", "count", "count_distinct", "min", "max", "avg", "median", "percentile"
 ]
 
-QuantityKind = Literal["extensive", "rate", "ratio"]
+QuantityKind = Literal["flow", "stock", "value_per_unit"]
 
-ACCUMULATES: frozenset[str] = frozenset({"extensive"})
+ACCUMULATES: frozenset[str] = frozenset({"flow"})
 """Kinds that may be summed.
 
-An EXTENSIVE quantity scales with the size of the set it is measured over --
-money, counts, durations. Adding two of them yields a quantity of the same kind,
-which is what makes a total mean anything.
+A FLOW is measured over a period and accumulates -- money taken, units sold,
+seconds elapsed. Adding two flows yields a flow, which is what makes a total
+mean anything.
 
-A RATE is per-unit (a price, a speed) and a RATIO is a proportion (a percentage,
-a share). Neither accumulates: summing prices produces a number with no
-referent, and summing percentages can exceed 100. They can be averaged,
-minimised and maximised perfectly well -- only `sum` is refused.
+A STOCK is a level at an instant -- inventory on hand, an account balance, a
+headcount. It sums across space (all warehouses) and NOT across time: adding
+Monday's balance to Tuesday's yields a number no accountant recognises. See
+`Metric.over_time`.
 
-The distinction is not decoration. `grain` validates a metric's GRAIN -- that
-its rows are not replicated -- and had no way to say whether the QUANTITY was
-additive at all, so `sum(track.unit_price)` came back arithmetically perfect,
-flagged `additive: true`, and answered no question."""
+A VALUE_PER_UNIT is a rate or a proportion -- a unit price, an exchange rate, a
+percentage. It accumulates over nothing.
+
+The names are Lenz & Shoshani's (1997), not ours. An earlier version read
+`extensive | rate | ratio`, invented before the literature was read: `extensive`
+had no partner once `stock` arrived, and `rate` versus `ratio` was a distinction
+nothing branched on. See `docs/QUANTITY-TYPES.md`.
+"""
 
 FANOUT_IMMUNE: frozenset[str] = frozenset({"min", "max", "count_distinct"})
 """Aggregates that row replication cannot change.

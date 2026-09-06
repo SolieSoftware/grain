@@ -94,7 +94,7 @@ def test_both_engines_agree_on_the_unusable_total(engines):
 
 
 @pytest.mark.parametrize("which", ["subquery", "symmetric"])
-def test_a_metric_summing_a_rate_is_refused_before_either_engine_sees_it(
+def test_a_metric_summing_a_value_per_unit_is_refused_before_either_engine_sees_it(
     which, db_engine
 ):
     """The check sits in the loader, below the engine seam, so neither engine
@@ -106,7 +106,7 @@ def test_a_metric_summing_a_rate_is_refused_before_either_engine_sees_it(
     onto.objects["Track"] = ObjectType(
         name="Track", primary="track",
         properties={"unit_price": Property(column="track.unit_price",
-                                           type="decimal", quantity="rate")},
+                                           type="decimal", quantity="value_per_unit")},
     )
     onto.metrics["price_sum"] = Metric(
         name="price_sum", grain="track", type="decimal",
