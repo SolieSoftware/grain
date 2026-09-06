@@ -145,9 +145,9 @@ signal at all. What IS mechanical is the additivity verdict: a grouped level is
 reported non-additive, with its reason, and `agent/tools.py` turns that into a
 caveat carried by the data. So the rule now says the flag is the dependable
 signal and the description is a convention -- a guarantee claimed but not held
-is worse than none, and this branch already shipped one. Backlog item 6
-(publishing the field) would make the textual half enforceable; until then it is
-a convention, and named as one. Publishing
+is worse than none, and this branch already shipped one. `docs/BACKLOG.md`'s
+"Publish stock-ness as a structured field" is what would make the textual half
+enforceable; until then it is a convention, and named as one. Publishing
 `quantity` as a metric key instead would be a deliberate change to
 `test_does_not_enumerate_metric_dimension_pairs`, and would still need this rule
 to say what follows from it."""
