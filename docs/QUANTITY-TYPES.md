@@ -158,9 +158,40 @@ Current implementations that carry some of this:
 | **dbt MetricFlow** | `non_additive_dimension` with `window_choice: min\|max` — the `stock` case, tied to a named time dimension |
 | **Cube** | non-additive measure handling, with pre-aggregation caveats |
 | **Looker** | fan-out correctness via symmetric aggregates; no quantity typing |
-| **grain** | fan-out correctness (both engines) + `quantity` on properties; no `stock`, no time dimension |
+| **grain** | fan-out correctness (both engines) + `quantity` on properties; no `stock`, no time dimension, no composition |
+| *nobody surveyed* | **a typed composition result** — the gap in §5a |
 
 ---
+
+## 5a. Where MetricFlow stops — measured, not assumed
+
+MetricFlow is the closest production system to what we want, so it is worth
+being precise about the boundary.
+
+**What it has.** `non_additive_dimension` (`name`, `window_choice: min|max`,
+`window_groupings`) models the **stock** case properly, tied to a named time
+dimension. It also has two composition kinds: **ratio** metrics
+(numerator/denominator, each independently filterable) and **derived** metrics
+(an arbitrary expression over other metrics).
+
+**What it does not have: any typing of the composition's result.** Its
+validation is syntactic — the docs say it *"warns if it is missing or references
+undefined metrics"*, and that is the extent of it. There is no additivity
+constraint, no `non_additive_dimension` inference, and no quantity type on a
+derived or ratio metric. The docs are explicit about the consequence:
+
+> MetricFlow does not prevent summing a ratio metric (like revenue per customer)
+> across dimensions where such aggregation would be semantically incorrect. This
+> places the burden of correctness on the data modeler and query author.
+
+So `revenue_per_customer` can be summed across regions and nothing objects. That
+is the same class of silent wrong number grain's `quantity` field exists to
+prevent — reappearing one level up, at composition.
+
+**This is the frontier.** Deriving the result's quantity type from its operands
+is standard in Kennedy's system and absent from every semantic layer surveyed.
+It is also the only mechanism that makes agent-defined metrics safe, because the
+type system rather than the author decides what the result may be used for.
 
 ## 6. What a quantity type system for grain would actually need
 
