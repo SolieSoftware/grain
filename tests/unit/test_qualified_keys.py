@@ -58,6 +58,63 @@ def test_a_key_naming_an_untraversed_link_is_refused_with_the_repair(chinook_lit
     assert "add the Employee_Manager hop to traverse" in excinfo.value.alternatives
 
 
+def test_the_old_advice_would_not_have_resolved_the_root_object_case(chinook_lite):
+    """The defect this exists to close, pinned from the failing side. Qualifying
+    by the query's OWN object used to be diagnosed as an untraversed link, and
+    following that advice literally — adding the hop — names a link that does
+    not exist. An alternative that raises on the next turn is worse than no
+    alternative: it costs a turn and teaches the caller something false."""
+    with pytest.raises(UnknownName, match="Unknown link 'Employee'"):
+        plan(chinook_lite, object="Employee", group_by=["Employee.last_name"],
+             traverse=[Hop(link="Employee")])
+
+
+def test_a_key_qualified_by_the_querys_own_object_is_repaired_by_using_it(
+        chinook_lite, lite_metadata):
+    """Group keys are LINK-qualified while the root's own properties are bare,
+    so `Employee.last_name` rooted on Employee is the likeliest first mistake
+    anyone makes. Checked by USING the alternative — building and compiling the
+    repaired spec — rather than by matching the message, which is the
+    distinction three earlier reviews of this defect turned on."""
+    with pytest.raises(GroupKeyNotOnPath) as excinfo:
+        plan(chinook_lite, object="Employee", group_by=["Employee.last_name"],
+             traverse=[Hop(link="Employee_Manager")])
+    assert excinfo.value.root_object == "Employee"
+    assert not any("hop to traverse" in a for a in excinfo.value.alternatives)
+
+    repaired = excinfo.value.alternatives[0].split("'")[1]
+    assert repaired == "last_name"
+    sql = build(chinook_lite, lite_metadata, object="Employee",
+                group_by=[repaired], traverse=[Hop(link="Employee_Manager")],
+                metrics=[])
+    assert "last_name" in sql
+
+
+def test_the_root_object_case_still_checks_the_property_exists(chinook_lite):
+    """The alternative must resolve, so the property it names is resolved
+    first. A misspelling gets the honest error about the property, naming the
+    object looked in — not an alternative that would fail on the next turn."""
+    with pytest.raises(UnknownName, match="property of Employee"):
+        plan(chinook_lite, object="Employee", group_by=["Employee.nope"])
+
+
+def test_the_symmetric_resolver_says_the_same_thing(chinook_lite):
+    """The two resolvers are a deliberate copy, so a fix to one is not a fix to
+    the other. Pinned here because this refusal's whole value is that the
+    alternative resolves, and an engine still handing back the old advice would
+    hand back one that does not."""
+    from grain.engine_symmetric.resolve import resolve as symmetric_resolve
+
+    with pytest.raises(GroupKeyNotOnPath) as excinfo:
+        symmetric_resolve(
+            QuerySpec(object="Employee", group_by=["Employee.last_name"]),
+            chinook_lite,
+        )
+    assert excinfo.value.root_object == "Employee"
+    assert excinfo.value.alternatives == [
+        "use 'last_name' without the 'Employee.' qualifier"]
+
+
 def test_a_key_naming_a_link_traversed_twice_is_ambiguous(chinook_lite):
     """A qualified key names a LINK, not a hop. Silently picking the first or the
     last would be choosing between two different numbers."""

@@ -88,18 +88,42 @@ class GroupKeyNotOnPath(GrainError):
     that hop lands on, so the hop has to be in `traverse`. Naming the missing hop
     is the whole repair, and it is the one an agent can act on without a turn
     spent guessing.
+
+    TWO different mistakes reach here, and they need different repairs. The
+    second is `group_by: ["Artist.name"]` where `Artist` is the query's OWN
+    object: qualification is by LINK, so the root's properties are named BARE,
+    and this is the likeliest first mistake anyone makes. Advising "add the
+    Artist hop to traverse" there names a link that does not exist and produces
+    `UnknownName` on the next turn -- an alternative that cannot resolve, which
+    is the one defect this codebase refuses to ship. So `root_object` switches
+    the message and the alternative to the repair that works: drop the
+    qualifier.
     """
 
-    def __init__(self, key: str, link: str, traversed: list[str]) -> None:
-        alternatives = [f"add the {link} hop to traverse"]
-        alternatives += [f"use {name}.<property> instead" for name in traversed]
-        hint = f" Traversed: {', '.join(traversed)}." if traversed else ""
-        super().__init__(
-            f"Group key '{key}' names the link '{link}', which this query does not "
-            f"traverse.{hint} Alternatives: {', '.join(alternatives)}.",
-            alternatives,
-        )
+    def __init__(
+        self, key: str, link: str, traversed: list[str], root_object: str | None = None
+    ) -> None:
+        _, _, prop_name = key.partition(".")
+        if root_object is not None:
+            alternatives = [f"use '{prop_name}' without the '{link}.' qualifier"]
+            super().__init__(
+                f"Group key '{key}' is qualified by '{link}', which is this query's "
+                f"own object, not a link. A group key is qualified only by a link "
+                f"the query traverses; a property of '{root_object}' itself is "
+                f"named bare. Alternatives: {alternatives[0]}.",
+                alternatives,
+            )
+        else:
+            alternatives = [f"add the {link} hop to traverse"]
+            alternatives += [f"use {name}.<property> instead" for name in traversed]
+            hint = f" Traversed: {', '.join(traversed)}." if traversed else ""
+            super().__init__(
+                f"Group key '{key}' names the link '{link}', which this query does "
+                f"not traverse.{hint} Alternatives: {', '.join(alternatives)}.",
+                alternatives,
+            )
         self.key, self.link = key, link
+        self.root_object = root_object
 
 
 class AmbiguousGroupKey(GrainError):

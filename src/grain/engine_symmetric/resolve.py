@@ -154,6 +154,18 @@ def _group_key(key: str, root: ObjectType, path: list[Edge]) -> ResolvedProperty
     positions = [i for i, edge in enumerate(path) if edge.link.name == link_name]
     traversed = _unique([edge.link.name for edge in path])
     if not positions:
+        # Qualifying by the query's OWN object -- `Artist.name` rooted on Artist
+        # -- is the likeliest first mistake, because group keys are LINK-
+        # qualified while the root's own properties are bare. Checked only after
+        # `positions`, so a link that happens to share the root's name and IS
+        # traversed keeps its current meaning.
+        if link_name == root.name:
+            # Resolve the bare property BEFORE recommending it. An alternative
+            # that raises `UnknownName` on the next turn is the circular-refusal
+            # defect this branch exists to end; `_property` raises the honest
+            # error about the property instead, naming the object it looked in.
+            _property(root, prop_name)
+            raise GroupKeyNotOnPath(key, link_name, traversed, root_object=root.name)
         raise GroupKeyNotOnPath(key, link_name, traversed)
     if len(positions) > 1:
         raise AmbiguousGroupKey(key, link_name, positions)

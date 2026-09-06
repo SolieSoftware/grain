@@ -285,3 +285,38 @@ def test_the_sql_explain_shows_is_the_sql_query_runs(g):
     ]
     # And twice more, to catch a plan that depends on anything but its inputs.
     assert g.explain(spec)["compiled_sql"] == explained["compiled_sql"]
+
+
+# --------------------------------------------------------------- root-qualified key
+
+
+def test_qualifying_a_group_key_by_the_root_object_names_a_repair_that_runs(g):
+    """The third circular-alternative defect on this branch, and the one sitting
+    on the mistake a new caller is likeliest to make first: group keys are
+    LINK-qualified, so the root object's own properties are named BARE, and
+    `Artist.name` rooted on Artist looks like the obvious spelling.
+
+    It used to be diagnosed as an untraversed link, advising "add the Artist hop
+    to traverse" — which resolves to `UnknownName: Unknown link 'Artist'` — while
+    the repair that works was not offered at all.
+
+    Checked by USING the alternative against the live database, not by matching
+    the message: three reviews passed over this defect's siblings because the
+    tests read the text instead of running the advice."""
+    from grain.engine.errors import GroupKeyNotOnPath
+
+    hops = [Hop(link="Artist_Albums"), Hop(link="Album_Tracks"),
+            Hop(link="Track_InvoiceLines")]
+    with pytest.raises(GroupKeyNotOnPath) as excinfo:
+        g.query(QuerySpec(object="Artist", traverse=hops,
+                          group_by=["Artist.name"], metrics=["revenue"], limit=None))
+    assert excinfo.value.root_object == "Artist"
+
+    repaired = excinfo.value.alternatives[0].split("'")[1]
+    result = g.query(QuerySpec(object="Artist", traverse=hops, group_by=[repaired],
+                               metrics=["revenue"], limit=None))
+    # Every invoice line reaches exactly one artist, so the repaired query is the
+    # whole of revenue split 165 ways — the anchor, not merely a non-empty read.
+    assert len(result.rows) == 165
+    assert sum(r[1] for r in result.rows) == TRUE_REVENUE
+    assert result.additive is True
