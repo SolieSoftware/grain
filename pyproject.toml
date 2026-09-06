@@ -48,7 +48,14 @@ testpaths = ["tests"]
 # Without it the suite collects only under `python -m pytest` (which adds the
 # working directory itself) and fails under `uv run pytest` / a bare `pytest`,
 # which is what the README tells people to use.
-pythonpath = ["."]
+#
+# `tools` is on it too, so the integration tests can import `tools/oracle.py`
+# — the independent judge — under the same module name `tools/sweep.py` uses
+# (`PYTHONPATH=tools`). One name for one file: a second copy reachable as
+# `tools.oracle` would be a second thing to keep in step. `oracle.py` reads
+# GRAIN_DATABASE_URL at import, so tests import it INSIDE a test body, after
+# the `db_engine` fixture has already skipped when it is unset.
+pythonpath = [".", "tools"]
 markers = ["integration: requires a loaded chinook database"]
 addopts = "-ra"
 # A cartesian product is a wrong ANSWER, not a style complaint: SQLAlchemy adds
