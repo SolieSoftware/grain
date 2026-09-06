@@ -19,6 +19,8 @@ from sqlalchemy import (
     MetaData,
     Select,
     and_,
+    distinct,
+    func,
     literal,
     literal_column,
     select,
@@ -727,6 +729,105 @@ def _aggregate_then_join(
     ), value
 
 
+def _window_to_boundary(
+    stmt: Select[Any],
+    scope: Scope,
+    metadata: MetaData,
+    rq: ResolvedQuery,
+    mp: MetricPlan,
+) -> Select[Any]:
+    """Restrict a stock to one instant per group, then let the aggregate run.
+
+    A stock sums across space and not across time. Rather than checking that
+    nobody sums across time, the window makes it impossible: within each group
+    only the rows at the first/last instant survive, so there is one instant to
+    sum over.
+
+        select key, sum(v) from (
+          select *, max(t) over (partition by key) as pick from ...
+        ) s where t = pick group by key
+
+    The partition is the query's own group keys, so the three cases in the
+    design all fall out of one construction: no group_by partitions over the
+    whole population (the global instant), a non-time key partitions per group
+    (each group's own instant), and grouping by the time dimension itself gives
+    each group one instant already, making the window a no-op.
+
+    A subquery is unavoidable -- a window function cannot be referenced from the
+    WHERE of the select that computes it. That is why the symmetric engine
+    refuses a stock outright rather than growing a special case.
+
+    Once wrapped, the outer query's only FROM element is this subquery -- the
+    physical tables `stmt` used to select from are gone from its scope, joined
+    only INSIDE it. Two things that used to read straight off those tables
+    therefore have to be re-exposed as the subquery's OWN columns before the
+    wrap, under names the caller can read back afterward:
+
+    - every group key, relabelled `rp.name` (its `ResolvedProperty` name) --
+      `scope.column(rp)` still resolves fine here, before the wrap, since this
+      function runs first; `compile_query` cannot use it again afterward.
+    - the metric's own per-row VALUE (not yet aggregated), under the reserved
+      name `__grain_value` -- `metric.sql_expr` is `agg(value)`, and applying
+      `agg` again has to happen in the OUTER query, over the rows this window
+      has just restricted to one instant, which is the entire point.
+
+    `metric.value` rather than `metric.sql_expr`: an opaque `expr` metric has no
+    separable per-row value to re-aggregate (it may already BE an aggregate
+    call, e.g. `count(distinct playlist.playlist_id)`, and embedding that inside
+    a per-row subquery with no GROUP BY would aggregate over the WHOLE
+    population instead of leaving one row per input row) -- refused below
+    rather than silently mishandled.
+    """
+    assert mp.window is not None
+    metric = mp.metric
+    if metric.value is None:
+        raise GrainError(
+            f"'{metric.name}' is a stock declared with an opaque 'expr', but "
+            f"windowing has to isolate its per-row value and re-aggregate it "
+            f"once the window has picked one instant. An opaque expr has "
+            f"nothing separable to isolate.",
+            [f"declare '{metric.name}' with 'agg' and 'value' instead of 'expr'"],
+        )
+    time_col = _column(metadata, mp.window.column.table, mp.window.column.column)
+    pick = func.max if mp.window.choice == "last" else func.min
+    partition = [scope.column(rp) for rp in rq.group_by]
+
+    # `with_only_columns`, not `add_columns`: `stmt` still selects the grain
+    # table's FULL row at this point (nothing has narrowed it down to
+    # `group_by`/the metric yet), so a group key whose name coincides with one
+    # of that row's own column names -- `total: {column: invoice.total}` is
+    # exactly this, name for name -- would otherwise be exported twice under
+    # the same label, which SQLAlchemy refuses outright rather than guessing
+    # which one a later reference means. Replacing the SELECT list with
+    # exactly the columns this window needs, each under a name we chose,
+    # removes the collision instead of hoping around it.
+    inner = stmt.with_only_columns(
+        *[scope.column(rp).label(rp.name) for rp in rq.group_by],
+        literal_column(metric.value).label("__grain_value"),
+        time_col.label("__grain_t"),
+        pick(time_col).over(partition_by=partition).label("__grain_pick"),
+    ).subquery(name=f"{metric.name}_at_boundary")
+    return select(inner).where(inner.c["__grain_t"] == inner.c["__grain_pick"])
+
+
+def _reaggregate(metric: Metric, value: ColumnElement[Any]) -> ColumnElement[Any]:
+    """Recompute a metric's aggregate over an already-isolated per-row VALUE.
+
+    Mirrors `Metric.sql_expr`'s own dispatch, but built from a `ColumnElement`
+    rather than rendered as text -- needed once a window has moved the value out
+    of its physical table and into a wrapping subquery, where `sql_expr`'s raw
+    `table.column` text no longer names anything in scope. `_window_to_boundary`
+    is the only caller, and it has already refused the one shape this cannot
+    handle -- an opaque `expr` with no separable value.
+    """
+    if metric.agg == "count_distinct":
+        return func.count(distinct(value))
+    if metric.agg in ("median", "percentile"):
+        p = 0.5 if metric.agg == "median" else metric.percentile
+        return func.percentile_disc(p).within_group(value)
+    return getattr(func, metric.agg)(value)
+
+
 def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Select[Any]:
     root_table = metadata.tables[rq.root.primary]
     scope = Scope(metadata)
@@ -739,10 +840,60 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
     stmt = _apply_path(stmt, scope, rq)
     stmt = _apply_filters(stmt, scope, metadata, rq)
 
-    group_cols = [scope.column(rp).label(rp.name) for rp in rq.group_by]
+    windowed = [mp for mp in plan.metric_plans if mp.window is not None]
+    window_mp: MetricPlan | None = None
+    if windowed:
+        if len(windowed) > 1:
+            # Two stocks would need two partitions of the same rows, and the
+            # second window's filter would apply to rows the first already
+            # dropped. Refused rather than silently answering one of them.
+            raise GrainError(
+                f"a query may window at most one stock metric; asked for "
+                f"{sorted(mp.metric.name for mp in windowed)}.",
+                ["ask for them in separate queries"],
+            )
+        window_mp = windowed[0]
+        if window_mp.strategy == "aggregate_then_join":
+            # The window only restricts THIS statement's own rows.
+            # `aggregate_then_join` pre-aggregates this metric in an entirely
+            # separate subquery, built fresh from the root and never touching
+            # `stmt` -- wrapping `stmt` here leaves that subquery's own sum
+            # untouched, which would silently sum across time. Refused rather
+            # than answering the wrong number.
+            raise GrainError(
+                f"'{window_mp.metric.name}' is a stock windowed to one "
+                f"instant, but this query forces it through aggregate-then-"
+                f"join (a fanning edge beyond '{window_mp.metric.grain}' is "
+                f"not pinned by a unique key). That strategy pre-aggregates "
+                f"in its own subquery, which the window cannot reach, so "
+                f"combining them would silently sum across time.",
+                [
+                    "add a group_by key that pins the fanning edge",
+                    "ask for this metric in a separate, simpler query",
+                ],
+            )
+        stmt = _window_to_boundary(stmt, scope, metadata, rq, window_mp)
+
+    # Read through the wrapped subquery's own columns once windowed -- `scope`
+    # still resolves the pre-wrap tables, which are no longer in FROM. Kept as
+    # bare (unlabelled) expressions so the same list can drive GROUP BY too,
+    # unchanged from before this function windowed anything.
+    group_bases = [
+        stmt.selected_columns[rp.name] if window_mp else scope.column(rp)
+        for rp in rq.group_by
+    ]
+    group_cols = [col.label(rp.name) for col, rp in zip(group_bases, rq.group_by)]
     inline = [mp for mp in plan.metric_plans if mp.strategy == "inline"]
     rewritten = [mp for mp in plan.metric_plans if mp.strategy == "aggregate_then_join"]
-    inline_cols = [_metric_column(mp.metric) for mp in inline]
+    inline_cols = [
+        (
+            _reaggregate(mp.metric, stmt.selected_columns["__grain_value"])
+            .label(mp.metric.name)
+            if mp.window is not None
+            else _metric_column(mp.metric)
+        )
+        for mp in inline
+    ]
 
     if rewritten and not group_cols and not inline_cols:
         # Only rewritten metrics and no keys to join them back on: there is no
@@ -762,7 +913,7 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
 
     stmt = stmt.with_only_columns(*group_cols, *inline_cols)
     if group_cols:
-        stmt = stmt.group_by(*[scope.column(rp) for rp in rq.group_by])
+        stmt = stmt.group_by(*group_bases)
 
     # Every column this query emits, by the name the caller knows it by. Built
     # here rather than reconstructed later because a rewritten metric's column
