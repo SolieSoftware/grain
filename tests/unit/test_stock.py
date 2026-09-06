@@ -59,6 +59,109 @@ def test_a_time_grain_on_a_non_temporal_column_is_refused(lite_metadata):
         validate(_time_onto(column="invoice.customer_id"), lite_metadata)
 
 
+def _nullable_time_metadata() -> MetaData:
+    """A temporal column the database allows to be NULL. `lite_metadata` has
+    none — chinook's `invoice_date` is NOT NULL — which is exactly why no test
+    could reach the boundary filter's NULL behaviour before."""
+    md = MetaData()
+    Table(
+        "snapshot", md,
+        Column("snapshot_id", Integer, primary_key=True, nullable=False),
+        Column("taken_at", DateTime),  # nullable
+        Column("balance", Numeric, nullable=False),
+    )
+    return md
+
+
+def _nullable_time_onto(nullable: bool = True) -> Ontology:
+    props = {
+        "when": Property(column="snapshot.taken_at", type="datetime",
+                         time_grain="day", nullable=nullable),
+        "balance": Property(column="snapshot.balance", type="decimal", quantity="flow"),
+    }
+    return Ontology(
+        name="t",
+        objects={"Snapshot": ObjectType(name="Snapshot", primary="snapshot",
+                                        properties=props)},
+    )
+
+
+def test_a_time_grain_on_a_nullable_column_is_refused():
+    """`_window_to_boundary` filters `t = max(t) over (...)`, and `max` ignores
+    NULLs, so a group whose instants are ALL NULL picks nothing and DISAPPEARS
+    from the result — a missing row, harder to notice than a wrong number.
+
+    `IS NOT DISTINCT FROM` is the right answer for a nullable group KEY, where
+    NULL is a real group and the rejoin only restores an identity `=` broke.
+    It is the wrong answer here: it would decide that undated rows form an
+    instant of their own, which nothing declares."""
+    with pytest.raises(OntologyError, match="nullable"):
+        validate(_nullable_time_onto(), _nullable_time_metadata())
+
+
+def test_the_refusal_names_the_column_to_make_not_null():
+    with pytest.raises(OntologyError) as exc:
+        validate(_nullable_time_onto(), _nullable_time_metadata())
+    assert "snapshot.taken_at" in str(exc.value)
+    assert "NOT NULL" in str(exc.value)
+
+
+def test_declaring_nullable_false_over_a_nullable_column_is_still_refused():
+    """The alternative the refusal names must be the real one. Declaring the
+    property NOT NULL when the database says otherwise does not resolve it —
+    `_check_nullability` refuses that first, which is what lets this check read
+    `prop.nullable` and trust it."""
+    with pytest.raises(OntologyError, match="may add nullability, never remove"):
+        validate(_nullable_time_onto(nullable=False), _nullable_time_metadata())
+
+
+def test_a_gratuitous_nullable_true_is_refused_and_says_so(lite_metadata):
+    """`nullable: true` over a column the database says is NOT NULL is legal
+    everywhere else — a declaration may always ADD nullability. On a time axis
+    it is not, and the repair is the declaration rather than the schema, so the
+    refusal has to name that one and not send the author to the DDL."""
+    onto = _time_onto()
+    onto.objects["Invoice"].properties["when"] = Property(
+        column="invoice.invoice_date", type="datetime", time_grain="day", nullable=True)
+    with pytest.raises(OntologyError) as exc:
+        validate(onto, lite_metadata)
+    assert "remove 'nullable: true'" in str(exc.value)
+
+
+def test_a_time_axis_behind_a_left_join_names_both_repairs():
+    """A left join manufactures NULLs from a NOT NULL column all on its own, so
+    it is a second, independent reason. Both are named at once: fixing only the
+    one the error mentioned would send the author straight back round."""
+    from grain.engine.ontology import TableJoin
+
+    md = MetaData()
+    Table("snapshot", md, Column("snapshot_id", Integer, primary_key=True, nullable=False))
+    Table("detail", md,
+          Column("snapshot_id", Integer, primary_key=True, nullable=False),
+          Column("taken_at", DateTime))  # nullable AND behind a left join
+    onto = Ontology(
+        name="t",
+        objects={"Snapshot": ObjectType(
+            name="Snapshot", primary="snapshot",
+            joins={"d": TableJoin(to="detail", kind="left", cardinality="many_to_one",
+                                  on=[{"from": "snapshot.snapshot_id",
+                                       "to": "detail.snapshot_id"}])},
+            properties={"when": Property(column="detail.taken_at", type="datetime",
+                                         time_grain="day", nullable=True, via="d")},
+        )},
+    )
+    with pytest.raises(OntologyError) as exc:
+        validate(onto, md)
+    assert "detail.taken_at" in str(exc.value)
+    assert "left join 'd'" in str(exc.value)
+
+
+def test_a_time_grain_on_a_not_null_column_is_accepted(lite_metadata):
+    """The named alternative, actually used: chinook's own `invoice_date` is
+    NOT NULL, so it loads."""
+    validate(_time_onto(), lite_metadata)
+
+
 # -- over_time ---------------------------------------------------------------
 
 def _stock(choice="last", dimension="when") -> Metric:

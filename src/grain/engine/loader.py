@@ -666,12 +666,59 @@ def _check_quantity_kinds(onto: Ontology) -> None:
             )
 
 
-def _check_time_dimensions(onto: Ontology, metadata: MetaData) -> None:
-    """A `time_grain` must sit on a column the database agrees is temporal.
+def _nullable_time_axis_fixes(obj: ObjectType, prop: Property, column) -> list[str]:
+    """Every repair that actually applies, so the advice resolves in one pass.
 
-    Checked against the REFLECTED type rather than the declared `type`, for the
-    same reason order-statistic eligibility is: a declaration can be wrong, and
-    the consequence here is a window over a column whose ordering means nothing.
+    All the applicable ones, not the first: a column that is nullable in the
+    database AND reached through a left join needs both fixed, and naming only
+    one would send the author back round for the other.
+    """
+    fixes: list[str] = []
+    if column.nullable:
+        fixes.append(
+            f"make '{prop.column.qualified}' NOT NULL in the database, or point "
+            f"the time axis at a column that already is"
+        )
+    if prop.via is not None and obj.joins[prop.via].kind == "left":
+        fixes.append(
+            f"move the time axis off the left join '{prop.via}', which yields "
+            f"NULL for every unmatched row, or make that join 'kind: inner'"
+        )
+    if not fixes:
+        fixes.append(
+            f"'{prop.column.qualified}' is already NOT NULL in the database, so "
+            f"remove 'nullable: true' from the property"
+        )
+    return fixes
+
+
+def _check_time_dimensions(onto: Ontology, metadata: MetaData) -> None:
+    """A `time_grain` must sit on a column the database agrees is temporal, and
+    on one that cannot be NULL.
+
+    The type is checked against the REFLECTED column rather than the declared
+    `type`, for the same reason order-statistic eligibility is: a declaration
+    can be wrong, and the consequence here is a window over a column whose
+    ordering means nothing.
+
+    Nullability is REFUSED rather than accommodated, which is the opposite of
+    what `compile._key_match` does for a nullable group KEY, and deliberately
+    so. There, `IS NOT DISTINCT FROM` restores an identity that `=` broke: NULL
+    is a perfectly good group, its rows belong together, and the rejoin is
+    bookkeeping over an answer already known. Here there is no answer to
+    restore. `_window_to_boundary` compares each row's instant against
+    `max(t) over (...)`, and `max` ignores NULLs, so a group whose instants are
+    ALL NULL picks nothing and vanishes from the result -- a missing row, which
+    is harder to notice than a wrong number. Matching NULL to NULL instead would
+    not fix that; it would DECIDE that undated rows form one instant of their
+    own, and nothing in the ontology says that. A row with no instant cannot be
+    placed in time, so it can be neither included nor excluded on evidence, and
+    the honest move is to refuse the declaration at load.
+
+    Read off `prop.nullable`, not the reflected flag, because `_check_nullability`
+    has already forced the two to agree: a property may add nullability but
+    never remove it, so `nullable: false` here is a claim the database and the
+    join graph have both already confirmed.
     """
     for obj in onto.objects.values():
         for prop_name, prop in obj.properties.items():
@@ -687,6 +734,15 @@ def _check_time_dimensions(onto: Ontology, metadata: MetaData) -> None:
                     f"'{prop.column.qualified}' is {column.type}, not a date or "
                     f"timestamp. A time axis has to order and compare "
                     f"meaningfully."
+                )
+            if prop.nullable:
+                raise OntologyError(
+                    f"{ctx} declares time_grain '{prop.time_grain}' but is "
+                    f"nullable. A stock windows to the latest instant per "
+                    f"group; a row with no instant cannot be placed in time, "
+                    f"and a group where every instant is NULL disappears from "
+                    f"the result entirely rather than answering wrongly. "
+                    f"{'; '.join(_nullable_time_axis_fixes(obj, prop, column))}."
                 )
 
     for metric in onto.metrics.values():
