@@ -142,3 +142,25 @@ def test_a_flow_carries_no_window(chinook_lite):
         QuerySpec(object="Invoice", metrics=["invoice_total"]), chinook_lite))
     (mp,) = plan.metric_plans
     assert mp.window is None
+
+
+def test_the_symmetric_engine_refuses_a_stock(lite_metadata):
+    """Stated in the design rather than discovered. The window needs a window
+    function inside a subquery, and that engine is one pass over the join.
+
+    The cost is real: the differential harness cannot cross-check stock, so the
+    oracle is the only independent judge for it."""
+    from grain.engine.errors import MetricNotSymmetric
+    from grain.engine_symmetric.symmetric import require_eligible
+
+    with pytest.raises(MetricNotSymmetric, match="subquery"):
+        require_eligible(_stock(), lite_metadata)
+
+
+def test_the_refusal_explains_why(lite_metadata):
+    from grain.engine.errors import MetricNotSymmetric
+    from grain.engine_symmetric.symmetric import require_eligible
+
+    with pytest.raises(MetricNotSymmetric) as exc:
+        require_eligible(_stock(), lite_metadata)
+    assert "window" in str(exc.value).lower()

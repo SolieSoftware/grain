@@ -154,6 +154,12 @@ def require_eligible(metric: Metric, metadata: MetaData) -> None:
             "it is declared as an opaque 'expr', so the aggregate function and "
             "the per-row value cannot be separated",
         )
+    if metric.over_time is not None:
+        raise MetricNotSymmetric(
+            metric.name,
+            "collapsing a stock to one instant needs a window function inside a "
+            "subquery, and this engine is one pass over the join",
+        )
     if metric.agg in NEEDS_ENCODING and metric.type not in EXACT_TYPES:
         raise MetricNotSymmetric(
             metric.name,
