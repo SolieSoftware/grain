@@ -1,0 +1,51 @@
+# A stock over the chinook database — deliberately its own pack.
+#
+# Until now a domain pack only DESCRIBED a database it did not own. `stock`
+# needs a level column and chinook has none, so `inventory.sql` in this
+# directory creates and seeds one. That makes this pack a producer of schema,
+# and the design is emphatic that such a thing must be opt-in: the table is
+# created by `tools/seed_inventory.py`, never as a side effect of `Grain.load`.
+#
+# Which is exactly why `Inventory` is NOT declared in the chinook pack. The
+# loader refuses an ontology naming a table the database does not have, so
+# folding these two declarations into `chinook/ontology.yaml` would make the
+# ENTIRE chinook pack — every test, the CLI's default domain, the agent —
+# unloadable on any machine where the seed had not been run. A pack whose
+# ontology may not describe the database it is pointed at is not a pack.
+#
+# So the reference to `daily_inventory` lives here, in a pack a caller loads
+# only after seeding. It declares no links to chinook's objects: a stock at
+# `daily_inventory` grain needs none to be measured, and the traversal case is
+# already covered elsewhere.
+name: chinook_inventory
+description: >
+  Units on hand per track, snapshotted daily. Seeded by tools/seed_inventory.py
+  into the chinook database; this pack does not load without it.
+
+objects:
+  Inventory:
+    primary: daily_inventory
+    description: >
+      Units on hand per track, snapshotted daily. A STOCK: it sums across
+      tracks and not across dates.
+    properties:
+      as_of: {column: daily_inventory.as_of_date, type: date, time_grain: day}
+      track: {column: daily_inventory.track_id, type: integer}
+      units: {column: daily_inventory.units_on_hand, type: integer, quantity: stock}
+
+metrics:
+  inventory_level:
+    grain: daily_inventory
+    agg: sum
+    value: "daily_inventory.units_on_hand"
+    quantity: stock
+    over_time: {dimension: as_of, choice: last}
+    type: integer
+    description: >
+      Units on hand at the most recent snapshot. Never summed across dates —
+      the window collapses to one instant first.
+    ai_context:
+      synonyms: [inventory, stock on hand, units available, current inventory]
+      instructions: >
+        A level, not a total. Asking for it "over January" gives the level at
+        the end of January, not the sum of January's daily levels.
