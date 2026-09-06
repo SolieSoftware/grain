@@ -114,6 +114,51 @@ def test_the_boundary_is_per_group_not_global(g):
     assert rows == {1: 4, 2: 7, 3: 100, 4: 999}
 
 
+# -- the verdict attached to the column -------------------------------------
+#
+# Every figure above is correct. What was wrong was the CLAIM: a windowed stock
+# reported `additive: true`, and the wrong number arrived one honest sum()
+# later, computed by the agent the flag was written for. See the comment in
+# `engine/grain.py` for why neither standing safety net could see it -- the
+# oracle agrees per group; it is the total that is wrong.
+
+
+def test_a_grouped_level_is_not_additive(g):
+    """1110 (by track) is not the ungrouped 111, and 1153 (by as_of) is exactly
+    the naive across-time sum the control test pins as wrong. Both are one
+    sum() away from the rows, so the column must not claim to be summable."""
+    for key, total in [(["track"], 1110), (["as_of"], 1153)]:
+        result = g.query(QuerySpec(object="Inventory", group_by=key,
+                                   metrics=["inventory_level"], limit=None))
+        assert sum(int(r[1]) for r in result.rows) == total
+        assert result.additive is False, f"group_by={key} claims to be summable"
+        assert "inventory_level" in result.non_additive_reason
+        assert "level at no instant" in result.non_additive_reason
+
+
+def test_an_ungrouped_level_is_additive(g):
+    """One global boundary instant, one figure, nothing to add it to. Marking
+    THIS non-additive would cry wolf on the only whole answer there is."""
+    result = g.query(LEVEL)
+    assert int(result.rows[0][0]) == 111
+    assert result.additive is True
+    assert result.non_additive_reason is None
+
+
+def test_the_agent_is_told_not_to_total_a_grouped_level(g):
+    """Through the agent's own tool rather than by reading the plan: the caveat
+    is attached by CODE and only when `additive` is False, and `prompt.py`
+    tells the model to total otherwise. So the flag being wrong ended in a
+    sanctioned "total inventory: 1153", and this pins that path closed."""
+    from grain.agent import tools
+
+    text, is_error = tools.run(g, {"object": "Inventory", "group_by": ["as_of"],
+                                   "metrics": ["inventory_level"]})
+    assert not is_error
+    assert "NOT ADDITIVE" in text
+    assert "do NOT add them together" in text
+
+
 def _opening_level():
     """`choice: first`, declared on the fly. The shipped pack has no use for an
     opening level; the field would otherwise never be read by a test against

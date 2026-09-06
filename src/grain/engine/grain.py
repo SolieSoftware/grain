@@ -385,6 +385,49 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
             prop = obj.properties[metric.over_time.dimension]
             window = WindowSpec(column=prop.column, choice=metric.over_time.choice)
 
+        # A LEVEL is whole only at one instant, and `_window_to_boundary`
+        # partitions by the query's OWN group keys -- so each group collapses to
+        # its own boundary instant. Every group is right; the total is a level at
+        # no instant. Grouped by track: 4+7+100+999 = 1110, against an ungrouped
+        # answer of 111. Grouped by the time dimension itself the total is 1153,
+        # which is exactly the naive across-time sum
+        # `test_the_naive_sum_differs_from_the_level` pins as the wrong answer.
+        #
+        # The verdict above cannot see this, because it asks a different
+        # question: do the GROUPS overlap? A stock's do not, so it answers True
+        # and would license that total -- `agent/tools.py` emits its "do NOT add
+        # them together" caveat only when `additive` is False, and the prompt
+        # tells the model to total otherwise.
+        #
+        # Recorded because NEITHER standing safety net could see it, and the next
+        # person will assume one of them did. The differential harness cannot:
+        # the rule is a claim made in the plan layer, and the symmetric engine
+        # refuses a stock outright, so there is no second engine to disagree.
+        # `tools/oracle.py` cannot either: it answers the same per-group question
+        # and AGREES per group. It is the total that is wrong, and no per-group
+        # cross-check has an opinion about a total nobody computed.
+        #
+        # Ungrouped stays additive: one global boundary instant, one figure, and
+        # nothing to add it to.
+        if window is not None and rq.group_by:
+            additive = False
+            level_reason = (
+                f"'{metric.name}' is a level at an instant, windowed to each "
+                f"group's own boundary. Each group is correct — but adding them "
+                f"sums across instants and gives a level at no instant, and "
+                f"grouping by the time dimension itself makes the total the "
+                f"across-time sum a level is defined not to have."
+            )
+            # An earlier reason is still true (a pinned fan downstream of a stock
+            # reaches here), so it is kept rather than overwritten: the caller
+            # gets one string, and dropping half of why the total is meaningless
+            # is not an improvement on saying both.
+            non_additive_reason = (
+                f"{non_additive_reason} {level_reason}"
+                if non_additive_reason
+                else level_reason
+            )
+
         plan.metric_plans.append(
             MetricPlan(
                 metric=metric,
