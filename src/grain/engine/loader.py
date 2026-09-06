@@ -427,6 +427,7 @@ def validate(
         _validate_metric_expr(metric, metadata)
 
     _check_quantity_kinds(onto)
+    _check_time_dimensions(onto, metadata)
 
     if engine is not None:
         _check_symmetric_headroom(onto, metadata, engine)
@@ -573,3 +574,29 @@ def _check_quantity_kinds(onto: Ontology) -> None:
                 f"Alternatives: use agg avg, min or max; or measure a flow "
                 f"instead."
             )
+
+
+def _check_time_dimensions(onto: Ontology, metadata: MetaData) -> None:
+    """A `time_grain` must sit on a column the database agrees is temporal.
+
+    Checked against the REFLECTED type rather than the declared `type`, for the
+    same reason order-statistic eligibility is: a declaration can be wrong, and
+    the consequence here is a window over a column whose ordering means nothing.
+    """
+    from sqlalchemy import Date, DateTime
+
+    for obj in onto.objects.values():
+        for prop_name, prop in obj.properties.items():
+            if prop.time_grain is None:
+                continue
+            ctx = f"object '{obj.name}' property '{prop_name}'"
+            _require_column(metadata, prop.column, ctx)
+            column = metadata.tables[prop.column.table].columns[
+                prop.column.column]
+            if not isinstance(column.type, (Date, DateTime)):
+                raise OntologyError(
+                    f"{ctx} declares time_grain '{prop.time_grain}' but "
+                    f"'{prop.column.qualified}' is {column.type}, not a date or "
+                    f"timestamp. A time axis has to order and compare "
+                    f"meaningfully."
+                )

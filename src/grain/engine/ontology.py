@@ -39,6 +39,18 @@ had no partner once `stock` arrived, and `rate` versus `ratio` was a distinction
 nothing branched on. See `docs/QUANTITY-TYPES.md`.
 """
 
+TimeGrain = Literal["day", "week", "month", "quarter", "year"]
+"""The granularity at which a time axis is recorded.
+
+Declared, not inferred: a `date` column may hold daily snapshots or
+month-end ones, and nothing in the type says which.
+
+v1 records it and does not yet re-bucket by it -- grain has no `date_trunc`, so
+grouping by month is not expressible. It is declared now so the granularity
+work has somewhere to attach, and the loader verifies it against the column's
+reflected type so it is checked even while its granularity meaning is unused.
+"""
+
 FANOUT_IMMUNE: frozenset[str] = frozenset({"min", "max", "count_distinct"})
 """Aggregates that row replication cannot change.
 
@@ -150,6 +162,12 @@ class Property(BaseModel):
     nullable: bool = False
     unique: bool = False
     quantity: QuantityKind | None = None
+    time_grain: TimeGrain | None = None
+    """Set to make this property THE time axis of its object.
+
+    A `stock` metric names it in `over_time` to say which dimension it must not
+    be summed across.
+    """
     via: str | None = None
     description: str | None = None
 
