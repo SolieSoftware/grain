@@ -262,6 +262,18 @@ class Metric(BaseModel):
     """The p of `agg: percentile`, in [0, 1]. Meaningless on any other
     aggregate and refused there -- a field that quietly does nothing is worse
     than no field."""
+    quantity: QuantityKind | None = None
+    """What kind of number this metric produces.
+
+    On the METRIC rather than only on a property, because stock-ness describes
+    what the RESULT means and not what a column holds. Headcount is the textbook
+    stock and `count_distinct(employee.employee_id)` reads no quantity column at
+    all -- `employee_id` is an identifier.
+
+    Omitted, it is INFERRED from the summed column's property where the metric
+    is a `sum` over a bare column. A metric's own declaration always wins; see
+    `loader._effective_quantity`.
+    """
     description: str | None = None
     ai_context: AiContext | None = None
 

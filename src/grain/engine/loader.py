@@ -491,6 +491,36 @@ def _property_for_column(onto: Ontology, table: str, column: str):
     return None, None
 
 
+def _effective_quantity(onto: Ontology, metric: Metric) -> tuple[str | None, str]:
+    """This metric's quantity kind, and where it came from.
+
+    Precedence is one-directional: the METRIC wins. It is closer to the meaning
+    of the number than any single column it reads, and a metric may legitimately
+    produce a different kind from its inputs -- `revenue` is a value_per_unit
+    times a flow and is itself a flow.
+
+    A disagreement is NOT an error. That is a deliberate choice and a debatable
+    one: the alternative is refusing at load the way conflicting `expr`/`agg`
+    declarations are refused. It is allowed here because the metric is
+    authoritative rather than merely later, so there is nothing for the author to
+    resolve.
+
+    The returned source string is for error messages, so a refusal can name
+    where the offending declaration actually lives.
+    """
+    if metric.quantity is not None:
+        return metric.quantity, f"metric '{metric.name}'"
+    if metric.agg != "sum" or not metric.value:
+        return None, f"metric '{metric.name}'"
+    match = BARE_COLUMN.match(metric.value)
+    if match is None:
+        return None, f"metric '{metric.name}'"
+    name, prop = _property_for_column(onto, match.group(1), match.group(2))
+    if prop is None or prop.quantity is None:
+        return None, f"metric '{metric.name}'"
+    return prop.quantity, f"property '{name}'"
+
+
 def _check_quantity_kinds(onto: Ontology) -> None:
     """A quantity that does not accumulate may not be summed.
 
@@ -499,47 +529,47 @@ def _check_quantity_kinds(onto: Ontology) -> None:
     `sum(track.unit_price)` was arithmetically perfect, reported
     `additive: true`, and answered no useful question.
 
-    NARROW ON PURPOSE: only a summed value that is a BARE column reference is
-    inspected. `sum(a * b)` is left alone, because a rate multiplied by a count
-    genuinely IS extensive -- `revenue` is `sum(unit_price * quantity)`, exactly
-    that shape, and a cruder rule would refuse grain's flagship metric. Doing
-    the algebra properly would mean an expression evaluator; declaring the
-    composite's kind is the author's job, and writing the product is them doing
-    it.
+    NARROW ON PURPOSE, unchanged from before: only a summed value that is a BARE
+    column reference is inspected when the kind must be inferred. `sum(a * b)`
+    is left alone, because a rate multiplied by a count genuinely IS a flow --
+    `revenue` is `sum(unit_price * quantity)`, exactly that shape, and a cruder
+    rule would refuse grain's flagship metric.
 
-    Opaque `expr` metrics are skipped. They are not decomposed, so nothing here
-    can tell whether they sum, and sniffing for `sum(` with a regex is the kind
-    of fragility this file exists to avoid. Recorded as a known limit rather
-    than papered over.
+    A metric that declares its own `quantity` is checked whatever its value's
+    shape, because the author has stated the kind rather than leaving it to be
+    read off a column.
     """
     for metric in onto.metrics.values():
-        if metric.agg != "sum" or not metric.value:
+        if metric.agg != "sum":
             continue
-        match = BARE_COLUMN.match(metric.value)
-        if match is None:
-            continue
-        table, column = match.group(1), match.group(2)
-        ctx = f"metric '{metric.name}' sums '{table}.{column}'"
-
-        name, prop = _property_for_column(onto, table, column)
-        if prop is None:
-            raise OntologyError(
-                f"{ctx}, which has no declared property, so there is nowhere to "
-                f"say whether that quantity accumulates. Declare a property for "
-                f"it with an explicit 'quantity'."
-            )
-        if prop.quantity is None:
+        kind, source = _effective_quantity(onto, metric)
+        if kind is None:
+            # Only demand a declaration where one could have been inferred --
+            # a bare column. Anything else was never covered by this rule.
+            match = BARE_COLUMN.match(metric.value) if metric.value else None
+            if match is None:
+                continue
+            table, column = match.groups()
+            ctx = f"metric '{metric.name}' sums '{table}.{column}'"
+            name, prop = _property_for_column(onto, table, column)
+            if prop is None:
+                raise OntologyError(
+                    f"{ctx}, which has no declared property, so there is "
+                    f"nowhere to say whether that quantity accumulates. Declare "
+                    f"a property for it with an explicit 'quantity', or set "
+                    f"'quantity' on the metric."
+                )
             raise OntologyError(
                 f"{ctx}, but '{name}' does not declare a 'quantity'. Summing is "
                 f"only meaningful for a quantity that accumulates, so say which "
                 f"it is: flow (money, counts, durations), stock (a level at an "
                 f"instant) or value_per_unit (a price, a rate, a percentage)."
             )
-        if prop.quantity not in ACCUMULATES:
+        if kind not in ACCUMULATES:
             raise OntologyError(
-                f"{ctx}, which '{name}' declares a {prop.quantity}. A "
-                f"{prop.quantity} does not accumulate -- summing it produces a "
-                f"number with no referent, however correct the arithmetic. "
+                f"metric '{metric.name}' sums a quantity that {source} declares "
+                f"a {kind}. A {kind} does not accumulate -- summing it produces "
+                f"a number with no referent, however correct the arithmetic. "
                 f"Alternatives: use agg avg, min or max; or measure a flow "
-                f"quantity instead."
+                f"instead."
             )

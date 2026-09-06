@@ -135,3 +135,56 @@ def test_the_real_chinook_pack_still_loads(chinook_lite):
     """The fixture pack declares real metrics including the product form. If
     this breaks, the rule is too broad."""
     assert "revenue" in chinook_lite.metrics
+
+
+# -- the declaration site ----------------------------------------------------
+
+def test_a_metric_may_declare_its_own_quantity(lite_metadata):
+    """Headcount is the textbook stock and a column-level field cannot express
+    it: count_distinct(employee_id) has no quantity column, because employee_id
+    is an identifier."""
+    m = Metric(name="headcount", grain="employee", type="integer",
+               agg="count_distinct", value="employee.employee_id",
+               quantity="stock")
+    assert m.quantity == "stock"
+
+
+def test_a_metric_quantity_beats_the_property(lite_metadata):
+    """Precedence is one-directional and stated: the metric is closer to the
+    meaning of the number, so it wins. No error is raised on disagreement."""
+    from grain.engine.loader import _effective_quantity
+
+    onto = _onto(Metric(name="m", grain="track", type="decimal", agg="sum",
+                        value="track.unit_price", quantity="flow"),
+                 quantity="value_per_unit")
+    kind, source = _effective_quantity(onto, onto.metrics["m"])
+    assert kind == "flow"
+    assert "metric" in source
+
+
+def test_the_property_is_used_when_the_metric_is_silent(lite_metadata):
+    """What keeps chinook's four existing annotations working."""
+    from grain.engine.loader import _effective_quantity
+
+    onto = _onto(_sum("track.unit_price"), quantity="value_per_unit")
+    kind, source = _effective_quantity(onto, onto.metrics["m"])
+    assert kind == "value_per_unit"
+    assert "property" in source
+
+
+def test_inference_still_refuses_the_original_case(lite_metadata):
+    """The migration must not silently drop the guarantee Task 1 preserved: a
+    sum over a bare column with no metric-level quantity is still refused when
+    the property says value_per_unit."""
+    with pytest.raises(OntologyError, match="does not accumulate"):
+        validate(_onto(_sum("track.unit_price"), quantity="value_per_unit"),
+                 lite_metadata)
+
+
+def test_a_metric_level_declaration_works_without_any_property(lite_metadata):
+    """`sum(track.album_id)` has no declared property, which used to be refused
+    outright. A metric-level quantity now supplies what the column cannot."""
+    m = Metric(name="m", grain="track", type="integer", agg="sum",
+               value="track.album_id", quantity="flow")
+    onto = _onto(m, quantity="flow")
+    validate(onto, lite_metadata)
