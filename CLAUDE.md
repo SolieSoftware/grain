@@ -11,7 +11,7 @@ Read `README.md` first for what it does. This file is about how to work on it.
 
 ```bash
 export GRAIN_DATABASE_URL="postgresql+psycopg://$(whoami)@localhost:5432/chinook"
-uv run pytest -q          # 552 passing, 0 skipped
+uv run pytest -q          # 554 passing, 0 skipped
 uv run ruff check src tests tools
 ```
 
@@ -29,9 +29,9 @@ Three outcomes, two of them misleading:
 
 | `GRAIN_DATABASE_URL` | result |
 |---|---|
-| unset | `382 passed, 170 skipped` — **green, and never touched a database** |
-| `postgresql://…` | `4 failed, 383 passed, 165 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
-| `postgresql+psycopg://…` | **552 passed** — the only form that runs the measured tests |
+| unset | `384 passed, 170 skipped` — **green, and never touched a database** |
+| `postgresql://…` | `4 failed, 385 passed, 165 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
+| `postgresql+psycopg://…` | **554 passed** — the only form that runs the measured tests |
 
 The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
@@ -93,6 +93,14 @@ fix to one is not a fix to the other — this is a known, accepted cost.
 other engine, never silently served another way — an engine that quietly
 switched strategy would make the differential harness meaningless.
 
+**It now refuses a `stock` as well as an opaque `expr`.** Windowing to a
+boundary instant needs a window function read from the WHERE of the select that
+computes it, which requires a subquery, which is the one thing that engine does
+not do. So `inventory_level` sits in the corpus's `DIVERGENT` set rather than
+its agreeing one, and (2) below cannot see that path at all: **for a stock the
+oracle is not the strongest independent check, it is the only one.** A change to
+the windowing that the oracle does not cover is a change nothing covers.
+
 ## Verifying a change
 
 In order of strength:
@@ -124,8 +132,17 @@ you think you have fixed one, you must delete a test, not just assert it.
 **Fixed, and the test was deleted rather than inverted.** grain used to validate
 a metric's *grain* — that its rows are not replicated — with no concept of
 whether the *quantity* accumulated, so `sum(track.unit_price)` came back perfect
-and meaningless. A property now declares `quantity: flow | stock | value_per_unit`
-and the loader refuses a `sum` over one that does not accumulate.
+and meaningless. A **metric** now declares `quantity: flow | stock |
+value_per_unit` and the loader refuses a `sum` over one that does not
+accumulate. It lives on the metric because headcount — the textbook `stock` — is
+`count_distinct(employee.employee_id)`, which reads no quantity column at all:
+`employee_id` is an identifier. Stock-ness is a fact about what the result means.
+`Property.quantity` stays, because it is still the right place to say what a
+*column* is, and a silent metric summing a bare column inherits it, so the
+common case needs one word in one place.
+Where both speak, the metric wins, silently; refusing the disagreement would be
+the more conservative reading of this codebase's own rules and is recorded as
+debatable rather than settled.
 
 The rule is deliberately narrow: it inspects a summed value only when that value
 is a BARE column. `sum(a * b)` is left alone, because a value-per-unit times a
@@ -185,11 +202,21 @@ units-of-measure type system for the composition half, Lenz & Shoshani's
 summarizability conditions for the aggregation half. Read it before adding to
 `quantity`.
 
-Two things it establishes. grain's `extensive | rate | ratio` maps onto the
-established **flow / stock / value-per-unit**, where `stock` is missing and is
-the semi-additive case. And `revenue = sum(unit_price * quantity)` — a
-value-per-unit times a flow — is currently a special case in the loader that a
-composition algebra would make a derivation.
+Two things it established, one of which is now spent. grain's field used to read
+`extensive | rate | ratio`, which mapped onto the established **flow / stock /
+value-per-unit** with `stock` missing — the semi-additive case I had recorded as
+needing a subsystem, and which the framework said was a third value of one
+field. That reading was right: `quantity` now reads
+`flow | stock | value_per_unit`, and the whole of the stock case is that value
+plus `time_grain` on a property and `over_time` on a metric. The rename was
+breaking with **no alias path**, pinned by
+`tests/unit/test_quantity_kind.py`, so the docs are the only migration guide
+there is — an ontology written from the old names does not load.
+
+What is still open is the other half: `revenue = sum(unit_price * quantity)` — a
+value-per-unit times a flow — is a special case in the loader that a composition
+algebra would make a derivation. §5a of that document is where the surveyed
+tools all stop, and it is the next phase.
 
 ## Conventions
 

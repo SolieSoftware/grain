@@ -1,6 +1,9 @@
 # Stock Quantities and a Time Dimension — Design
 
-**Status:** design 2026-09-06, not yet implemented.
+**Status:** implemented 2026-09-06. See
+`docs/plans/2026-09-06-stock-and-time-plan.md`. §6 is still out of scope, as
+written; §5's engine asymmetry landed as designed, with the symmetric engine
+refusing a stock.
 
 **Goal:** Let grain express a quantity that sums across space but not across
 time — an inventory level, a balance, a headcount — and compute it correctly by

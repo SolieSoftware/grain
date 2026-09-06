@@ -8,7 +8,11 @@ its own names, and the established framework is both older and better factored
 than what we invented. This document records what exists, maps grain onto it,
 and states what is genuinely missing.
 
-**Nothing here is implemented.** It is the reading behind a design.
+**The aggregation half is now implemented; the composition half is not.** grain
+took this document's vocabulary (`flow | stock | value_per_unit`) and built the
+`stock` case on 2026-09-06 — see `docs/plans/2026-09-06-stock-and-time-design.md`.
+Everything about composition, §5a and §6's algebra, remains reading behind a
+design that has not been written.
 
 ---
 
@@ -111,29 +115,40 @@ are better than the ones we invented:
 
 ## 4. Where grain sits against this
 
-grain currently declares `quantity: extensive | rate | ratio`. Mapping it on:
+grain now declares `quantity: flow | stock | value_per_unit` — these names, not
+its own. It read `extensive | rate | ratio` when this document was written, and
+the table below is what changed and why:
 
 | grain | Lenz & Shoshani | Note |
 |---|---|---|
-| `extensive` | **flow** | same concept, worse name |
-| `rate` | **value-per-unit** | same concept |
-| `ratio` | **value-per-unit** | grain splits what they merge, for error-message quality only |
-| *(nothing)* | **stock** | **missing entirely** |
+| `flow` | **flow** | was `extensive`: the same concept under a name with no partner |
+| `stock` | **stock** | was **missing entirely**; built 2026-09-06 |
+| `value_per_unit` | **value-per-unit** | was `rate` and `ratio`, two names for one behaviour, now one |
 
-Two conclusions follow, and they are the point of this document.
+Two conclusions followed, and they were the point of this document.
 
-**The missing category is the important one.** grain has no way to say "sums
-across accounts but not across time". That is `stock`, and I previously recorded
-it as *semi-additive* needing "a subsystem rather than a field". The framework
-says otherwise: it is a **third value of the same field**, distinguished by
-which dimensions it may be summed over. What grain lacks is not a subsystem but
-a notion of *which dimension is time* — which is precisely what dbt's
-`non_additive_dimension` supplies with `window_choice: max`.
+**The missing category was the important one.** grain had no way to say "sums
+across accounts but not across time". That is `stock`, and I had previously
+recorded it as *semi-additive* needing "a subsystem rather than a field". The
+framework said otherwise: it is a **third value of the same field**,
+distinguished by which dimensions it may be summed over. What grain lacked was
+not a subsystem but a notion of *which dimension is time* — which is precisely
+what dbt's `non_additive_dimension` supplies with `window_choice: max`.
+
+That reading held. The implementation is one new value of `quantity`, one
+`time_grain` marker on a property, and one `over_time: {dimension, choice}` on
+the metric — no subsystem. The vocabulary is `first|last` rather than
+MetricFlow's `min|max`, because `window_choice: max` reads as the largest VALUE
+when it means the value at the latest DATE.
 
 **`rate` versus `ratio` is a distinction the literature does not make**, and we
-made it only because "a rate does not accumulate" reads better in an error than
-"this is non-additive". That is a real benefit and a real cost: two names for
-one behaviour invite a future reader to look for a difference that is not there.
+had made it only because "a rate does not accumulate" reads better in an error
+than "this is non-additive". That was a real benefit and a real cost: two names
+for one behaviour invite a future reader to look for a difference that is not
+there. They were merged into `value_per_unit`, and the error message lost
+nothing measurable: it names the metric, says a `value_per_unit` does not
+accumulate, and offers `avg`, `min` or `max`. The word was never the part
+carrying the reader.
 
 ---
 
@@ -158,7 +173,7 @@ Current implementations that carry some of this:
 | **dbt MetricFlow** | `non_additive_dimension` with `window_choice: min\|max` — the `stock` case, tied to a named time dimension |
 | **Cube** | non-additive measure handling, with pre-aggregation caveats |
 | **Looker** | fan-out correctness via symmetric aggregates; no quantity typing |
-| **grain** | fan-out correctness (both engines) + `quantity` on properties; no `stock`, no time dimension, no composition |
+| **grain** | fan-out correctness (both engines) + `flow`/`stock`/`value_per_unit` with windowing; no composition, no granularity |
 | *nobody surveyed* | **a typed composition result** — the gap in §5a |
 
 ---
@@ -195,13 +210,18 @@ type system rather than the author decides what the result may be used for.
 
 ## 6. What a quantity type system for grain would actually need
 
-Sketch only — the design is not written.
+Sketch only for the composition half — that design is not written. The first
+item below is built.
 
-**A lattice, not a flag.** The three conditions are independent, so a quantity
-needs to say which *dimensions* it may be summed over, not merely whether it may
-be summed. `flow` sums over everything; `stock` sums over everything except
-time; `value-per-unit` sums over nothing. That is one field plus a notion of
-which dimension is time.
+**A lattice, not a flag — done.** The three conditions are independent, so a
+quantity needs to say which *dimensions* it may be summed over, not merely
+whether it may be summed. `flow` sums over everything; `stock` sums over
+everything except time; `value-per-unit` sums over nothing. That is one field
+plus a notion of which dimension is time, and it is what shipped: `time_grain`
+marks the axis, `over_time` names the instant, and the engine windows to that
+instant rather than checking that nobody sums past it. What is still absent is
+any *granularity* meaning for `time_grain` — no `date_trunc`, so "inventory in
+Q1" cannot be asked.
 
 **A composition algebra**, which is where Kennedy comes back in. The useful
 rules are few:
@@ -240,9 +260,13 @@ aggregating are the right rows; grain's whole engine layer is about making that
 true.
 
 **Where grain is behind.** It rediscovered two of the three conditions by
-running into them, named neither, and has only a partial version of the third.
+running into them, named neither, and had only a partial version of the third.
 Reading this literature first would have produced a better taxonomy and would
-have identified `stock` as a missing *value* rather than a missing subsystem.
+have identified `stock` as a missing *value* rather than a missing subsystem —
+which is exactly what reading it did produce, one round later and at the cost of
+a breaking rename with no alias path. Type compatibility is now complete for a
+single measure; what remains behind is composition (§5a), where nobody surveyed
+is ahead either.
 
 **The transferable lesson**, for FINDINGS: the problem was well-factored in 1997
 and we solved it in the order the bugs arrived. That produced correct code and a

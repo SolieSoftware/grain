@@ -3,7 +3,7 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development.** All 16 planned tasks are complete and **552 tests
+**Status: in development.** All 16 planned tasks are complete and **554 tests
 pass**. The **five critical defects** a whole-branch review found on 2026-08-18
 were fixed on 2026-08-24, each with a measured regression test at the facade —
 see *"Defects found and fixed"* below. **I3** (recursive traversal) is fixed too,
@@ -151,7 +151,7 @@ docs/plans/                  the plans and designs this was built from
 uv venv && uv pip install -e ".[dev,mcp]"
 cp .env.example .env          # then set GRAIN_DATABASE_URL — see below
 set -a && . ./.env && set +a
-uv run pytest -q              # 552 passing, 0 skipped
+uv run pytest -q              # 554 passing, 0 skipped
 uv run ruff check src tests   # clean
 ```
 
@@ -163,9 +163,9 @@ run can end report something other than success:
 
 | `GRAIN_DATABASE_URL` | `pytest -q` |
 |---|---|
-| unset | `382 passed, 170 skipped` |
-| `postgresql://user@localhost/chinook` | `4 failed, 383 passed, 165 errors` |
-| `postgresql+psycopg://user@localhost:5432/chinook` | `552 passed` |
+| unset | `384 passed, 170 skipped` |
+| `postgresql://user@localhost/chinook` | `4 failed, 385 passed, 165 errors` |
+| `postgresql+psycopg://user@localhost:5432/chinook` | `554 passed` |
 
 Only the third form runs the measured integration tests:
 
@@ -318,6 +318,7 @@ they keep a fanned join from double-counting.
 | Order statistics over a fan | `percentile_disc` after pre-aggregating | encoded array, one pass |
 | Key beyond the grain | refused (`KeyBeyondGrain`) | answered |
 | Non-unique group key over many-to-many | refused (`NonAdditiveRefused`) | answered |
+| Stock (level) metrics | windowed to a boundary | refused |
 | Speed | faster for a single metric | unestablished — see below |
 
 ```bash
@@ -330,9 +331,18 @@ Grain.load(domain_dir, engine, engine_name="symmetric")
 
 The symmetric engine is a **specialist, not a superset**: it implements only the
 aggregate taxonomy, and refuses a metric it cannot serve (opaque `expr`, an
-inexact type, or a grain table without a single-column integer primary key)
-rather than quietly falling back. An engine that answered via a different
-strategy than the one asked for would make the differential harness meaningless.
+inexact type, a grain table without a single-column integer primary key, or a
+`stock`) rather than quietly falling back. An engine that answered via a
+different strategy than the one asked for would make the differential harness
+meaningless.
+
+The `stock` refusal is the one that costs something. Windowing to a boundary
+instant needs a window function read from the `WHERE` of the select that
+computes it, so it needs a subquery, and one pass is what that engine is. The
+consequence is not just a missing feature: the two engines can no longer be
+compared on that path, so `tools/oracle.py` is the *only* independent check on
+stock windowing. That loss is recorded in the corpus itself, as a `DIVERGENT`
+entry, rather than only in the design that accepted it.
 
 **What it fixes.** Fan-out replication — one grain row counted several times
 *inside* one group. Through `Playlist → Track → InvoiceLine` the naive sum
@@ -452,12 +462,16 @@ group key, metric) combination and checks all three answers:
 
 | | |
 |---|---|
-| 85 combinations | **74 both correct · 11 symmetric-only · 0 wrong · 0 regressions** |
+| 90 combinations | **74 both correct · 11 symmetric-only · 3 subquery-only · 2 both refuse · 0 wrong** |
 
-All five divergences are one shape — a non-unique group key over a many-to-many.
-The subquery engine refuses it; hand-writing the `aggregate_then_join` it would
-have emitted confirms the refusal is justified, not over-cautious (`4215.42`
-against a true `2107.71`).
+All 11 symmetric-only are one shape — a non-unique group key over a
+many-to-many, which the subquery engine refuses (`NonAdditiveRefused`).
+Hand-writing the `aggregate_then_join` it would have emitted confirms the
+refusal is justified rather than over-cautious (`4215.42` against a true
+`2107.71`). The 3 subquery-only and the 2 both-refuse are all
+`inventory_level`: the symmetric engine refuses every stock, and two of those
+combinations reach it over a fan the subquery engine cannot window across
+either.
 
 **Performance.** chinook is too small to time — the same query measured 15.8 ms
 and 23.2 ms on separate runs — so [`tools/bench.py`](tools/bench.py) benchmarks
@@ -486,6 +500,19 @@ up to 10²⁸.
 - **No golden set and no ablation.** Whether this beats raw text-to-SQL on a fixed
   question set is the project's actual claim, and it is unmeasured.
 - **No writeback**, no inference, no entity resolution, no caching. Read-only.
+- **No granularity re-bucketing.** There is no `date_trunc`, so a time axis can
+  only be grouped at the exact instant its column holds. *"Inventory in Q1"* is
+  therefore inexpressible: the window can pick an instant and nothing can widen
+  a day into a quarter. `time_grain` is declared on a property and verified
+  against the column's type, but its *granularity* meaning is unused — the
+  closest thing in this codebase to a field nothing reads, accepted only because
+  the loader does check it, and because the later work needs somewhere to
+  attach.
+- **A stock windows to one instant and no further.** MetricFlow's
+  `window_groupings` — take each user's latest MRR, then sum across users —
+  needs a partition distinct from the query's own group keys, and has none here.
+  Two windowed stocks in one query are refused rather than solved, as is a stock
+  beside any other metric.
 - **The symmetric encoding's bound is only checked at load.** It needs
   `|v| < 5e29`; the loader measures the observed maximum, but rows written
   afterwards can cross it and condition (b) then fails silently. A
