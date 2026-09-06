@@ -219,3 +219,59 @@ def test_a_limit_without_an_order_returns_arbitrary_rows(which, engines):
 # a semi-join filters without replicating, so the C5 property the skip was
 # protecting survives intact. Deleted rather than inverted, per this file's bar.
 # The replacement lives in test_order_statistic_anchors.py.
+
+
+# --------------------------------------------------------------------------
+# 7. A time axis nobody can filter on.
+# --------------------------------------------------------------------------
+
+def test_neither_engine_can_take_a_date_valued_filter():
+    """`over_time` gives a metric a time AXIS. Nothing can filter along it.
+
+    `FilterScalar` is `str | int | float | bool`, with no date member, so a
+    `datetime.date` is refused at the spec boundary — by pydantic, with five
+    errors, one per union member, none of which says 'dates are not supported'.
+
+    PRE-EXISTING, not introduced by the stock work, and out of scope to fix
+    here: `QuerySpec.model_json_schema()` IS the agent's tool schema, so
+    widening the union changes a contract this repo deliberately pins. It is
+    recorded here rather than in a report because that is this file's job —
+    a gap that lives only in prose is a gap that gets rediscovered.
+
+    The consequence is concrete. Windowing to `last` gives the level NOW;
+    'inventory at the end of March' needs the population restricted to March
+    first, and that restriction is what cannot be expressed.
+    """
+    import datetime
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc:
+        QuerySpec(object="Invoice", metrics=["invoice_total"], limit=None,
+                  filters=[{"property": "invoice_date", "op": "lt",
+                            "value": datetime.date(2010, 1, 1)}])
+    assert len(exc.value.errors()) == 5
+
+
+@pytest.mark.parametrize("which", ["subquery", "symmetric"])
+def test_the_string_workaround_reaches_the_database_and_fails_there(which, engines):
+    """The obvious workaround — pass the date as an ISO string, which the union
+    does accept — is worse than the refusal above.
+
+    It compiles. `invoice.invoice_date < '2010-01-01'` looks right, and the bind
+    goes out as `$1::VARCHAR`, for which Postgres has no `timestamp < varchar`
+    operator. So the failure is a raw `ProgrammingError` from the driver, in
+    BOTH engines: it escapes as neither a `GrainError` nor a legal answer, and
+    it is raised AFTER a connection was acquired — the one rule this codebase
+    otherwise holds everywhere except `GuardTripped`.
+
+    Pinned in this shape on purpose. The day the union gains a date member,
+    this test must be deleted rather than have its expectation loosened.
+    """
+    from sqlalchemy.exc import ProgrammingError
+
+    spec = QuerySpec(object="Invoice", metrics=["invoice_total"], limit=None,
+                     filters=[{"property": "invoice_date", "op": "lt",
+                               "value": "2010-01-01"}])
+    with pytest.raises(ProgrammingError, match="operator does not exist"):
+        engines[which].query(spec)

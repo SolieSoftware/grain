@@ -90,3 +90,83 @@ for n in (1_000, 10_000, 100_000, 500_000, 1_000_000):
           f"{sym[0]:>10.1f}ms ({sym[1]:.0f}-{sym[2]:.0f}) "
           f"{pre[0]:>10.1f}ms ({pre[1]:.0f}-{pre[2]:.0f}) "
           f"{sym[0] / pre[0]:>6.2f}x  {flag}")
+
+
+# ---------------------------------------------------------------------------
+# The window shape: what a `stock` costs over a plain `sum`.
+# ---------------------------------------------------------------------------
+#
+# Its own data, deliberately: adding a time column to `facts` above would have
+# changed the generation cost the fan-out numbers were measured against, and a
+# benchmark whose baseline moved is not a benchmark.
+#
+# A stock cannot be summed across time, so the engine windows to one instant
+# first: `t = max(t) over (partition by <group keys>)`, then aggregates what
+# survives. That mandatory Sort + WindowAgg is what this measures. The cost is
+# inherent to computing the boundary correctly, not a defect — but this repo
+# has a scar exactly here. `SUM(DISTINCT ...)` was claimed to be "usually
+# faster" and measured 4x SLOWER the first time anyone timed it, so the number
+# is tracked rather than asserted.
+#
+# NOT the cost with an index. `daily_inventory`'s primary key is
+# (track_id, as_of_date) precisely so the planner can feed the WindowAgg
+# pre-sorted; `generate_series` has no index at all, so what follows is the
+# unindexed worst case.
+DATA_T = """
+with facts as (
+  select g as id,
+         mod(g, {groups}) + 1 as dim_id,
+         date '2026-01-01' + mod(g, {dates}) as t,
+         (mod(g, 1000) + 0.55)::numeric as v
+  from generate_series(1, {n}) g
+)
+"""
+
+# The baseline a flow pays: one HashAggregate, no ordering required.
+FLAT = DATA_T + "select dim_id, sum(v) as total from facts group by dim_id"
+
+# What a stock pays: the boundary instant per group, then the sum over it.
+# This is the shape `_window_to_boundary` emits, down to the bookkeeping names.
+WINDOWED = DATA_T + """
+select dim_id, sum(__grain_value) as total
+from (
+  select dim_id, v as __grain_value, t as __grain_t,
+         max(t) over (partition by dim_id) as __grain_pick
+  from facts
+) w
+where w.__grain_t = w.__grain_pick
+group by dim_id
+"""
+
+# An independent formulation of the same question, used only to confirm the
+# windowed shape answers it. Written as a semi-join on the boundary, which
+# cannot fan: one (dim_id, boundary) row per group.
+WINDOW_ORACLE = DATA_T + """
+, bound as (select dim_id, max(t) as b from facts group by dim_id)
+select f.dim_id, sum(f.v) as total
+from facts f join bound m on m.dim_id = f.dim_id and m.b = f.t
+group by f.dim_id
+"""
+
+GROUPS, DATES = 97, 30
+print(f"\n\nwindow (stock) vs flat aggregate, {GROUPS} groups over {DATES} dates,"
+      f" median of 5 runs (min-max)\n")
+print(f"{'rows':>11} {'flat sum':>20} {'windowed':>20} {'ratio':>7}  agrees?")
+print("-" * 72)
+
+for n in (1_000, 10_000, 100_000, 500_000, 1_000_000):
+    fmt = {"n": n, "groups": GROUPS, "dates": DATES}
+    flat = time_ms(FLAT.format(**fmt))
+    win = time_ms(WINDOWED.format(**fmt))
+    with engine.connect() as conn:
+        w = conn.execute(text(WINDOWED.format(**fmt))).all()
+        o = conn.execute(text(WINDOW_ORACLE.format(**fmt))).all()
+        f = conn.execute(text(FLAT.format(**fmt))).all()
+    agrees = sorted(map(tuple, w)) == sorted(map(tuple, o))
+    # If the window were a no-op the ratio would be measuring nothing.
+    windows = sorted(map(tuple, w)) != sorted(map(tuple, f))
+    flag = "yes" if agrees and windows else ("NO-OP-WINDOW" if agrees else "MISMATCH")
+    print(f"{n:>11,} "
+          f"{flat[0]:>10.1f}ms ({flat[1]:.0f}-{flat[2]:.0f}) "
+          f"{win[0]:>10.1f}ms ({win[1]:.0f}-{win[2]:.0f}) "
+          f"{win[0] / flat[0]:>6.2f}x  {flag}")
