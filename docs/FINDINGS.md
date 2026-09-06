@@ -281,6 +281,30 @@ was worth more.
 **Transferable:** where a second implementation is nearly free, take it even if
 the first already works. Its value is not the feature.
 
+### The problem was well-factored in 1997 and we solved it in bug order
+
+Lenz & Shoshani gave three necessary conditions for a valid aggregation —
+**disjointness** (a value rolls up to one group), **completeness** (it rolls up
+to some group), and **type compatibility** (attribute type, dimension type and
+aggregate must agree).
+
+grain enforces the first two and names neither. Disjointness is the
+overlapping-groups verdict; completeness is why `_key_is_nullable` picks
+`IS NOT DISTINCT FROM` over `=`. Both were derived from a bug rather than from
+the framework. The third we reached last and only partially.
+
+It also cost us a worse vocabulary. Their taxonomy is **flow / stock /
+value-per-unit**; ours is `extensive | rate | ratio`. `extensive` is `flow` with
+a clumsier name, `rate` and `ratio` split something the literature does not, and
+**`stock` is missing entirely** — which is the semi-additive case I had recorded
+as needing "a subsystem rather than a field". The framework says it is a third
+value of the same field, distinguished by which dimensions it may be summed
+over.
+
+**Transferable:** for a problem this old, read the 1997 paper before inventing
+the vocabulary. Solving in bug order produces correct code and a taxonomy shaped
+by which bug arrived first. Full write-up in `docs/QUANTITY-TYPES.md`.
+
 ### The elegant invariant was not the load-bearing one
 
 "The tool schema *is* `QuerySpec.model_json_schema()`, verbatim, so the contract

@@ -152,6 +152,19 @@ entries are mistakes made twice before being understood once.
 Add to it as you go. An entry is: what was believed, what turned out to be true,
 what it cost.
 
+## Before extending the quantity model
+
+`docs/QUANTITY-TYPES.md` is the prior art for metric quantity typing — Kennedy's
+units-of-measure type system for the composition half, Lenz & Shoshani's
+summarizability conditions for the aggregation half. Read it before adding to
+`quantity`.
+
+Two things it establishes. grain's `extensive | rate | ratio` maps onto the
+established **flow / stock / value-per-unit**, where `stock` is missing and is
+the semi-additive case. And `revenue = sum(unit_price * quantity)` — a
+value-per-unit times a flow — is currently a special case in the loader that a
+composition algebra would make a derivation.
+
 ## Conventions
 
 - Python 3.12+, SQLAlchemy 2.x (`select()` style only), Pydantic v2, psycopg 3.

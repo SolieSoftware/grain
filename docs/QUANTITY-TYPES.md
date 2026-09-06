@@ -1,0 +1,233 @@
+# Quantity Types — Research
+
+Prior art for a type system over the *quantities* metrics measure, and the rules
+governing how those quantities may be combined.
+
+Written because grain has been arriving at pieces of this independently, under
+its own names, and the established framework is both older and better factored
+than what we invented. This document records what exists, maps grain onto it,
+and states what is genuinely missing.
+
+**Nothing here is implemented.** It is the reading behind a design.
+
+---
+
+## 1. Two literatures, both relevant
+
+The idea splits cleanly into two traditions that have not much talked to each
+other.
+
+**Programming languages** solved the *composition* half: a type system where
+quantities carry dimensions, and multiplication and division derive new
+dimensions automatically while addition of incompatible dimensions is a type
+error.
+
+**Data warehousing** solved the *aggregation* half: under exactly what
+conditions is it valid to aggregate a measure over a dimension at all.
+
+grain needs both, and the second one turns out to be the deeper of the two.
+
+---
+
+## 2. Units of measure as a type system (Kennedy)
+
+Andrew Kennedy's units-of-measure system, shipped in F#, is the canonical
+programming-language treatment. [Types for Units-of-Measure: Theory and
+Practice](http://typesatwork.imm.dtu.dk/material/TaW_Paper_TypesAtWork_Kennedy.pdf)
+is the paper; [F# Units of
+Measure](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/units-of-measure)
+is the shipped implementation.
+
+The properties that matter for us:
+
+**Dimensions compose by an algebra, not a lookup table.** Multiplying and
+dividing derive the result's dimension automatically — divide a length by a time
+and you get a velocity without anyone declaring `velocity`. Units multiply,
+divide and **cancel**.
+
+**Adding incompatible dimensions is a type error.** `float<m> + float<kg>` does
+not compile. This is the property grain's `quantity` check gropes towards: a sum
+over something that does not accumulate should not be expressible.
+
+**It is fully inferrable**, integrated with Hindley–Milner unification via a
+dimension-unification algorithm. Annotations are needed only at the boundaries;
+the interior is inferred. Functions can be *generic* in their units.
+
+**It is erased.** Units exist at compile time and vanish from compiled code, so
+they cost nothing at runtime. For grain the analogue is that a quantity type
+constrains what SQL may be *emitted* and never appears in the SQL itself — which
+is exactly how `quantity` behaves today.
+
+**What it does not give us.** Dimensional analysis says `revenue / customers` is
+a `money/customer`, and says nothing about whether that number may then be
+averaged across regions. Composition is not summarizability.
+
+---
+
+## 3. Summarizability (Lenz & Shoshani) — the deeper result
+
+[Summarizability in OLAP and statistical databases](https://www.semanticscholar.org/paper/Summarizability-in-OLAP-and-statistical-data-bases-Lenz-Shoshani/72d5b3fec9a116f119a213633a2a75c96567d5ea)
+(1997) is the foundational paper, and it is the one grain should have been read
+against from the start. It gives **three necessary conditions** for an
+aggregation to be valid:
+
+### Disjointness
+
+An attribute value must roll up to **only one** group at the higher level. If a
+value belongs to two groups, aggregating over that level double-counts.
+
+**grain already enforces this**, without using the word. It is exactly the
+overlapping-groups problem: a track belongs to many playlists, so revenue by
+playlist sums to 5738.28 against a true 2328.60. grain reports `additive: false`
+and, where the per-group figure would also be wrong, refuses with
+`NonAdditiveRefused`.
+
+### Completeness
+
+Each value must roll up to **some** group. A value belonging to no group is
+silently dropped from the total.
+
+**grain already handles this too**, again unnamed: `_key_is_nullable` chooses
+`IS NOT DISTINCT FROM` over `=` when rejoining on a nullable key, precisely so a
+NULL group key does not vanish. The reasoning in that function is a
+rediscovery of the completeness condition.
+
+### Type compatibility
+
+The combination of **the attribute's type**, **the dimension's type**, and **the
+aggregation function** must be consistent. This is the condition grain reached
+last, and only partially.
+
+Lenz & Shoshani classify summary attributes into three kinds, and these names
+are better than the ones we invented:
+
+| Their term | Meaning | Sums over space? | Sums over time? |
+|---|---|---|---|
+| **flow** | measured over a period — revenue, units sold | yes | **yes** |
+| **stock** | a level at an instant — inventory, headcount, balance | yes | **no** |
+| **value-per-unit** | a rate — unit price, exchange rate, temperature | **no** | **no** |
+
+---
+
+## 4. Where grain sits against this
+
+grain currently declares `quantity: extensive | rate | ratio`. Mapping it on:
+
+| grain | Lenz & Shoshani | Note |
+|---|---|---|
+| `extensive` | **flow** | same concept, worse name |
+| `rate` | **value-per-unit** | same concept |
+| `ratio` | **value-per-unit** | grain splits what they merge, for error-message quality only |
+| *(nothing)* | **stock** | **missing entirely** |
+
+Two conclusions follow, and they are the point of this document.
+
+**The missing category is the important one.** grain has no way to say "sums
+across accounts but not across time". That is `stock`, and I previously recorded
+it as *semi-additive* needing "a subsystem rather than a field". The framework
+says otherwise: it is a **third value of the same field**, distinguished by
+which dimensions it may be summed over. What grain lacks is not a subsystem but
+a notion of *which dimension is time* — which is precisely what dbt's
+`non_additive_dimension` supplies with `window_choice: max`.
+
+**`rate` versus `ratio` is a distinction the literature does not make**, and we
+made it only because "a rate does not accumulate" reads better in an error than
+"this is non-additive". That is a real benefit and a real cost: two names for
+one behaviour invite a future reader to look for a difference that is not there.
+
+---
+
+## 5. The additivity taxonomy in data-warehouse practice
+
+Kimball's additive / semi-additive / non-additive split is the practitioner
+vocabulary for the same idea, and the DOLAP literature formalises it —
+[An analysis of additivity in OLAP systems](https://dl.acm.org/doi/10.1145/1031763.1031779)
+(2004) develops the taxonomy and its effect on summary data, and
+[Detecting summarizability in OLAP](https://www.sciencedirect.com/science/article/abs/pii/S0169023X13001274)
+addresses finding violations mechanically rather than trusting the modeller.
+
+The recurring recommendation across that work is worth quoting in spirit:
+**store the additivity properties as metadata and use them to restrict queries.**
+That is precisely what grain's `quantity` field does, and the literature treats
+it as the standard answer rather than an innovation.
+
+Current implementations that carry some of this:
+
+| Tool | What it models |
+|---|---|
+| **dbt MetricFlow** | `non_additive_dimension` with `window_choice: min\|max` — the `stock` case, tied to a named time dimension |
+| **Cube** | non-additive measure handling, with pre-aggregation caveats |
+| **Looker** | fan-out correctness via symmetric aggregates; no quantity typing |
+| **grain** | fan-out correctness (both engines) + `quantity` on properties; no `stock`, no time dimension |
+
+---
+
+## 6. What a quantity type system for grain would actually need
+
+Sketch only — the design is not written.
+
+**A lattice, not a flag.** The three conditions are independent, so a quantity
+needs to say which *dimensions* it may be summed over, not merely whether it may
+be summed. `flow` sums over everything; `stock` sums over everything except
+time; `value-per-unit` sums over nothing. That is one field plus a notion of
+which dimension is time.
+
+**A composition algebra**, which is where Kennedy comes back in. The useful
+rules are few:
+
+```
+flow            / flow            -> value-per-unit    (revenue per customer)
+flow            / count           -> value-per-unit    (average order value)
+value-per-unit  * flow            -> flow              (price x quantity = revenue)
+flow            + flow            -> flow              (same dimension only)
+value-per-unit  + value-per-unit  -> TYPE ERROR
+stock           + stock over time -> TYPE ERROR
+```
+
+The third line is the one grain already relies on: `revenue` is
+`sum(unit_price * quantity)`, a `value-per-unit` times a `flow`, and the
+`quantity` check special-cases it by inspecting only bare columns. **An algebra
+would make that a derivation rather than an exception** — which is the strongest
+argument for doing this properly.
+
+**Composed metrics as a first-class kind.** A metric defined as
+`revenue / customer_count` would carry a derived quantity type, and the engine
+could refuse to sum the result without anyone declaring that it must not be
+summed. This is the agent-defined-metric case: composition is safe *because* the
+type system, not the author, decides what the result may be used for.
+
+---
+
+## 7. Honest assessment
+
+**Where grain is ahead of the literature.** Lenz & Shoshani assume a star
+schema, where the fact table already sits at one grain. grain's `traverse`
+creates arbitrary join paths, so it faces a fan-out problem the 1997 framework
+does not address at all — and both engines solve it, verified against an
+independent oracle. The summarizability conditions assume the rows you are
+aggregating are the right rows; grain's whole engine layer is about making that
+true.
+
+**Where grain is behind.** It rediscovered two of the three conditions by
+running into them, named neither, and has only a partial version of the third.
+Reading this literature first would have produced a better taxonomy and would
+have identified `stock` as a missing *value* rather than a missing subsystem.
+
+**The transferable lesson**, for FINDINGS: the problem was well-factored in 1997
+and we solved it in the order the bugs arrived. That produced correct code and a
+worse vocabulary — `extensive` where the field wanted `flow`, and a `rate`/`ratio`
+split the literature does not make.
+
+---
+
+## Sources
+
+- Kennedy, [Types for Units-of-Measure: Theory and Practice](http://typesatwork.imm.dtu.dk/material/TaW_Paper_TypesAtWork_Kennedy.pdf)
+- [F# Units of Measure](https://learn.microsoft.com/en-us/dotnet/fsharp/language-reference/units-of-measure) · [F# language specification, §9](https://fsharp.github.io/fslang-spec/units-of-measure/)
+- Lenz & Shoshani, [Summarizability in OLAP and statistical data bases](https://www.semanticscholar.org/paper/Summarizability-in-OLAP-and-statistical-data-bases-Lenz-Shoshani/72d5b3fec9a116f119a213633a2a75c96567d5ea) (1997)
+- [An analysis of additivity in OLAP systems](https://dl.acm.org/doi/10.1145/1031763.1031779) (DOLAP 2004)
+- [Detecting summarizability in OLAP](https://www.sciencedirect.com/science/article/abs/pii/S0169023X13001274)
+- [A Taxonomy of Inaccurate Summaries and Their Management in OLAP Systems](https://link.springer.com/chapter/10.1007/11568322_28)
+- [Intensive and extensive properties](https://en.wikipedia.org/wiki/Intensive_and_extensive_properties)
+- [dbt: measures and `non_additive_dimension`](https://docs.getdbt.com/docs/build/measures)
+- [Cube: accelerating non-additive measures](https://cube.dev/docs/product/caching/recipes/non-additivity)
