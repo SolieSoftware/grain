@@ -152,7 +152,12 @@ Opaque `expr` metrics are skipped entirely; nothing can tell whether they sum.
 **Semi-additive quantities are no longer open — for one instant.** A level
 (`quantity: stock`) declares `over_time: {dimension, choice: first|last}`, and
 the subquery engine windows to that instant before aggregating, so it sums
-across accounts and never across time. dbt's MetricFlow spells the same thing
+across accounts and never across time. A **grouped** level is reported
+`additive: false`: the window partitions by the query's own group keys, so each
+group holds its own boundary instant and their total is a level at no instant.
+That verdict is computed beside the window rather than derived from it — the
+one known case is fixed and the general problem is the first item in
+`docs/BACKLOG.md`. dbt's MetricFlow spells the same thing
 `non_additive_dimension`; the vocabulary here is `first|last` rather than
 `min|max` because `window_choice: max` reads as the largest VALUE when it means
 the value at the latest DATE.

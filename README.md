@@ -62,7 +62,7 @@ result = g.query(QuerySpec(
 result.rows          # 24 groups, totalling 2328.60
 result.compiled_sql  # provenance — the exact SQL that ran
 result.rewrites      # what the engine changed, and which edge forced it
-result.additive      # False when the groups overlap and must not be summed
+result.additive      # False when this column must not be summed to a total
 ```
 
 Three outcomes per metric, decided from **declared cardinality alone** with no data
@@ -77,6 +77,12 @@ non-additive, when the path to a dimension crosses a many-to-many. `revenue` by
 `Playlist` returns 12 groups summing to 5738.28 against a true 2328.60 — the total
 is meaningless by construction, so it flags rather than refuses, because the
 per-group numbers are what the question asked for.
+
+Overlapping groups are one way to get there, not the definition. A **grouped
+level** is the other: each group windows to its own boundary instant, so
+`inventory_level` by track gives 4/7/100/999 — every figure right, and their
+1110 a level at no instant against an ungrouped 111. The flag says only that
+this column must not be totalled, and the reason says which of the two it is.
 
 That per-group guarantee has one condition, and the engine now **enforces** it
 rather than asserting it: a group must be one row of the root object. So the

@@ -552,3 +552,38 @@ enforcement boundary. Both survived. The verbatim-ness was decoration.
 
 **Transferable:** when an elegant invariant breaks, ask which part of it was
 doing the work. It is often not the part that made it elegant.
+
+### The figure was right and the label on it was wrong
+
+Every safety net in this repo is pointed at the number. Two engines are compared
+row by row, an oracle recomputes the answer in Python from raw rows, and the
+anchors are hand-verified figures. All of them agreed, and the system was still
+one honest `sum()` away from reporting 1153 as total inventory.
+
+`analyse()` built a stock's WINDOW and its ADDITIVITY VERDICT independently. The
+verdict asks one question — do the groups overlap? — and a stock's do not, so it
+said `additive: true`. But the window partitions by the query's own group keys,
+so each group collapses to its own boundary instant: correct per group, and a
+total that is a level at no instant. Grouped by the time dimension that total is
+exactly the naive across-time sum this work existed to prevent.
+
+**Why nothing caught it.** The differential harness needs two engines to
+disagree, and the claim is not SQL — worse, the symmetric engine refuses a stock
+outright, so there was no second answer at all. The oracle asks the same
+per-group question and agreed per group; it has no opinion about a total nobody
+computed. Both nets check the value. Neither checks the claim attached to it.
+
+**What it cost.** Nothing at runtime, because it was found in review — but it is
+the third defect of this exact shape on this project (C1, C5), and the first two
+were also found by a person reading the code rather than by a test. The fix is
+ten lines; the class of defect is now the first item in `docs/BACKLOG.md`,
+because the window and the verdict are still written beside each other rather
+than one being derived from the other.
+
+**Transferable:** a result carries values AND claims about those values, and a
+test that only compares values validates half of it. Where a flag licenses the
+caller to do arithmetic — `additive` here — the flag is part of the answer, and
+wrong flags produce wrong numbers in someone else's process where no harness is
+looking. Ask, of every claim a system publishes about its own output: what
+computes this, and is it derived from the thing it describes, or merely written
+next to it.
