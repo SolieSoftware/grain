@@ -152,11 +152,12 @@ def test_the_agent_is_told_not_to_total_a_grouped_level(g):
     sanctioned "total inventory: 1153", and this pins that path closed."""
     from grain.agent import tools
 
-    text, is_error = tools.run(g, {"object": "Inventory", "group_by": ["as_of"],
-                                   "metrics": ["inventory_level"]})
+    # `rendered`, not `text`: this module imports sqlalchemy's `text`.
+    rendered, is_error = tools.run(g, {"object": "Inventory", "group_by": ["as_of"],
+                                       "metrics": ["inventory_level"]})
     assert not is_error
-    assert "NOT ADDITIVE" in text
-    assert "do NOT add them together" in text
+    assert "NOT ADDITIVE" in rendered
+    assert "do NOT add them together" in rendered
 
 
 def _opening_level():
@@ -357,3 +358,70 @@ def test_a_narrowed_key_would_silently_answer_a_smaller_question(oracle_db, monk
                                         "daily_inventory", [])
     assert len(groups[()]) == 4
     assert oracle.answer(oracle_db, "Inventory", [], [], "inventory_level")[()] is not None
+
+
+# -- two deliberate limits, measured -----------------------------------------
+
+
+def test_the_opaque_refusals_alternative_returns_the_level(g):
+    """An opaque `expr` has no separable per-row value to isolate once the
+    window has picked an instant, so it is refused — and the refusal says to
+    declare the metric with `agg` and `value` instead.
+
+    Checked by USING that advice against the live database: the repaired metric
+    is the same measurement and returns the same 111. A refusal whose
+    alternative is never run is a refusal nobody has checked can be escaped."""
+    from grain.engine.errors import GrainError
+    from grain.engine.ontology import Metric, OverTime
+
+    over_time = OverTime(dimension="as_of", choice="last")
+    g.ontology.metrics["opaque_level"] = Metric(
+        name="opaque_level", grain="daily_inventory", type="integer",
+        expr="sum(daily_inventory.units_on_hand)", quantity="stock",
+        over_time=over_time)
+    try:
+        with pytest.raises(GrainError, match="opaque") as exc:
+            g.query(QuerySpec(object="Inventory", metrics=["opaque_level"],
+                              limit=None))
+        assert exc.value.alternatives == [
+            "declare 'opaque_level' with 'agg' and 'value' instead of 'expr'"]
+
+        g.ontology.metrics["opaque_level"] = Metric(
+            name="opaque_level", grain="daily_inventory", type="integer",
+            agg="sum", value="daily_inventory.units_on_hand", quantity="stock",
+            over_time=over_time)
+        result = g.query(QuerySpec(object="Inventory", metrics=["opaque_level"],
+                                   limit=None))
+    finally:
+        del g.ontology.metrics["opaque_level"]
+    assert int(result.rows[0][0]) == 111
+
+
+@pytest.mark.parametrize("agg,expected", [
+    ("avg", 144.125), ("max", 999), ("min", 3), ("count", 8)])
+def test_a_silent_non_sum_metric_over_a_stock_property_crosses_time(g, agg, expected):
+    """Inference is `sum`-only: `_effective_quantity` reads the property's
+    `stock` only for a sum over a bare column, so these load with no
+    `over_time` and aggregate over all eight snapshots — 144.125 is the mean
+    across dates, not a mean level, and 999 is track 4's peak on 01-01, a date
+    the level at the boundary does not include.
+
+    Pinned as a DELIBERATE limit, not an oversight. Those are meaningful
+    quantities across time in a way a SUM is not — an average level, a peak, a
+    trough — and refusing them to guard the one illegitimate case would cost
+    three legitimate ones. An author who wants the window declares
+    `quantity: stock` on the metric, and then `over_time` is required whatever
+    the aggregate. The unit test of the same name in `tests/unit/test_stock.py`
+    pins the load-time half; these are the numbers it lets through."""
+    from grain.engine.ontology import Metric
+
+    g.ontology.metrics["silent"] = Metric(
+        name="silent", grain="daily_inventory", type="decimal", agg=agg,
+        value="daily_inventory.units_on_hand")
+    try:
+        result = g.query(QuerySpec(object="Inventory", metrics=["silent"],
+                                   limit=None))
+    finally:
+        del g.ontology.metrics["silent"]
+    assert float(result.rows[0][0]) == expected
+    assert result.additive is True, "no window, so nothing makes it non-additive"

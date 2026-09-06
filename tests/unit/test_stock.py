@@ -223,15 +223,21 @@ def test_a_stock_is_no_longer_refused_for_not_accumulating(lite_metadata):
 
 # -- a stock INFERRED from the property, not declared on the metric ----------
 
-def _inferred_stock_onto(metric_quantity=None, over_time=None) -> Ontology:
+def _inferred_stock_onto(metric_quantity=None, over_time=None, agg="sum",
+                        time_grain="day") -> Ontology:
     """A stock declared on the PROPERTY, with a metric that says nothing.
 
     This is the path `_effective_quantity` exists to serve, and the one
     `Metric._check_over_time` structurally cannot see: it keys on
     `metric.quantity`, which is None here.
+
+    `agg` and `time_grain` are parameters so the two DELIBERATE limits of that
+    path can be pinned from the same construction: inference reads only a `sum`,
+    and the hint has a second branch for an object with no time axis at all.
     """
+    when = {"time_grain": time_grain} if time_grain else {}
     props = {
-        "when": Property(column="invoice.invoice_date", type="datetime", time_grain="day"),
+        "when": Property(column="invoice.invoice_date", type="datetime", **when),
         "balance": Property(column="invoice.total", type="decimal", quantity="stock"),
     }
     kw = {"quantity": metric_quantity} if metric_quantity else {}
@@ -241,7 +247,7 @@ def _inferred_stock_onto(metric_quantity=None, over_time=None) -> Ontology:
         name="t",
         objects={"Invoice": ObjectType(name="Invoice", primary="invoice", properties=props)},
         metrics={"level": Metric(name="level", grain="invoice", type="decimal",
-                                 agg="sum", value="invoice.total", **kw)},
+                                 agg=agg, value="invoice.total", **kw)},
     )
 
 
@@ -275,6 +281,56 @@ def test_the_named_flow_alternative_also_loads(lite_metadata):
     """The second escape the refusal offers: the metric declaring itself a flow.
     Precedence is one-directional, so the metric's word beats the property's."""
     validate(_inferred_stock_onto(metric_quantity="flow"), lite_metadata)
+
+
+def test_with_no_time_axis_the_hint_is_two_honest_steps_that_both_resolve(lite_metadata):
+    """`_over_time_hint`'s other branch: the object declares no `time_grain` at
+    all, so there is no axis to name and pointing at one would be advice that
+    fails on the next load. It says so and gives two steps instead — and this is
+    the branch a new domain author hits FIRST, since nothing has a time axis
+    until someone marks one.
+
+    Both steps are followed here rather than matched, ending in a clean load. A
+    hint that looped an author between two errors is the defect this whole
+    family of tests exists to catch."""
+    with pytest.raises(OntologyError) as exc:
+        validate(_inferred_stock_onto(time_grain=None), lite_metadata)
+    assert "No property of object 'Invoice' declares a 'time_grain'" in str(exc.value)
+
+    # Step 1: mark the date column. The next error is the OTHER branch, now able
+    # to name the axis that exists — honest progress, not a loop.
+    with pytest.raises(OntologyError) as after:
+        validate(_inferred_stock_onto(), lite_metadata)
+    assert "when" in str(after.value)
+
+    # Step 2: name it in over_time. Loads.
+    validate(_inferred_stock_onto(over_time={"dimension": "when", "choice": "last"}),
+             lite_metadata)
+
+
+def test_inference_reads_a_sum_only_and_that_is_a_deliberate_limit(lite_metadata):
+    """`_effective_quantity` returns None unless the metric is a `sum` over a
+    bare column, so an `avg`/`max`/`min` over a property declaring `stock` loads
+    clean, needs no `over_time`, and aggregates ACROSS time unchallenged.
+
+    Pinned as behaviour rather than fixed. Inference deliberately covers only
+    the case it can reason about: an `avg` of a level is an average level, `max`
+    a peak, `min` a trough — all meaningful across time in a way a SUM is not.
+    Refusing them would refuse three legitimate questions to guard one
+    illegitimate one. The neighbouring `_check_over_time` runs for EVERY metric,
+    which reads as though non-sum stocks were covered; they are not, and this is
+    that difference written down rather than left to be rediscovered.
+
+    An author who wants the window says so: `quantity: stock` on the metric is
+    explicit, and then `over_time` is required whatever the aggregate."""
+    for agg in ("avg", "max", "min"):
+        validate(_inferred_stock_onto(agg=agg), lite_metadata)
+
+    # The escape, so this is a limit rather than a dead end. Declared on the
+    # metric it is refused by `Metric` itself, before the loader is reached --
+    # what the model can decide alone, it decides alone.
+    with pytest.raises(ValidationError, match="sets no 'over_time'"):
+        _inferred_stock_onto(agg="avg", metric_quantity="stock")
 
 
 def test_over_time_on_a_silent_metric_over_a_flow_property_is_refused(lite_metadata):
@@ -556,7 +612,12 @@ def test_the_named_alternative_actually_resolves_the_recursive_case():
 
 def test_an_opaque_stock_is_refused_when_windowed(lite_metadata):
     """An opaque `expr` has no separable per-row value to isolate and
-    re-aggregate once the window has picked one instant."""
+    re-aggregate once the window has picked one instant.
+
+    Checked by USING the alternative it names, not by matching "opaque": two
+    circular-refusal defects shipped on this branch and both were missed by a
+    test that read the message instead of running the advice.
+    """
     from grain.engine.compile import compile_query
     from grain.engine.errors import GrainError
     from grain.engine.grain import analyse
@@ -564,13 +625,23 @@ def test_an_opaque_stock_is_refused_when_windowed(lite_metadata):
     from grain.engine.resolve import resolve
     from grain.engine.spec import QuerySpec
 
+    over_time = OverTime(dimension="when", choice="last")
     metric = Metric(name="level", grain="invoice", type="decimal",
                     expr="sum(invoice.total)", quantity="stock",
-                    over_time=OverTime(dimension="when", choice="last"))
+                    over_time=over_time)
     onto = _time_onto(metric)
     rq = resolve(QuerySpec(object="Invoice", metrics=["level"]), onto)
-    with pytest.raises(GrainError, match="opaque"):
+    with pytest.raises(GrainError, match="opaque") as exc:
         compile_query(rq, analyse(rq), lite_metadata)
+
+    assert exc.value.alternatives == [
+        "declare 'level' with 'agg' and 'value' instead of 'expr'"]
+    repaired = Metric(name="level", grain="invoice", type="decimal",
+                      agg="sum", value="invoice.total", quantity="stock",
+                      over_time=over_time)
+    fixed = resolve(QuerySpec(object="Invoice", metrics=["level"]),
+                    _time_onto(repaired))
+    compile_query(fixed, analyse(fixed), lite_metadata)  # must not raise
 
 
 def test_a_group_key_named_like_the_reserved_bookkeeping_columns_is_refused(lite_metadata):
