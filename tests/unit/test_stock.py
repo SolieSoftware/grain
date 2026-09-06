@@ -378,34 +378,16 @@ def test_the_refusal_explains_why(lite_metadata):
 
 
 # -- compiling the window ----------------------------------------------------
-
-def test_the_emitted_sql_windows_before_aggregating(lite_metadata):
-    """The shape: a window function inside a subquery, then a filter to the
-    picked instant, then the aggregate. Summing across time is impossible by
-    construction rather than by a check."""
-    from grain.engine.compile import compile_query, sql_text
-    from grain.engine.grain import analyse
-    from grain.engine.resolve import resolve
-    from grain.engine.spec import QuerySpec
-
-    onto = _time_onto(_stock())
-    rq = resolve(QuerySpec(object="Invoice", metrics=["level"]), onto)
-    sql = sql_text(compile_query(rq, analyse(rq), lite_metadata)).lower()
-    assert "over (" in sql, "needs a window function"
-    assert "max(" in sql, "last means the maximum instant"
-    assert "sum(" in sql
-
-
-def test_choice_first_uses_min(lite_metadata):
-    from grain.engine.compile import compile_query, sql_text
-    from grain.engine.grain import analyse
-    from grain.engine.resolve import resolve
-    from grain.engine.spec import QuerySpec
-
-    onto = _time_onto(_stock(choice="first"))
-    rq = resolve(QuerySpec(object="Invoice", metrics=["level"]), onto)
-    sql = sql_text(compile_query(rq, analyse(rq), lite_metadata)).lower()
-    assert "min(" in sql
+#
+# Two tests lived here that only grepped the emitted SQL for "over (", "max("
+# and "min(". They never executed it, so a wrongly-partitioned or
+# wrongly-filtered window passed all three — the third appearance in this file
+# of a pattern that had already shipped broken twice (see
+# `test_the_named_alternative_actually_resolves_the_recursive_case`). Deleted
+# rather than rewritten into slightly better string checks; the behavioural
+# coverage for the same ground is in
+# `tests/integration/test_stock_window_compile.py`, where the SQL runs and the
+# numbers are compared against an independent oracle.
 
 
 # -- guarding against a windowed stock alongside anything else ---------------
