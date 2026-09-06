@@ -21,9 +21,19 @@ CREATE TABLE IF NOT EXISTS daily_inventory (
 
 TRUNCATE daily_inventory;
 
+-- The rows are NOT inserted in date order, and that is deliberate. An oracle
+-- that deduped grain rows on `track_id` alone -- narrower than the real key --
+-- keeps whichever row it sees last per track. With the rows in date order that
+-- is each track's boundary row, so the wrong key still returns 111 and the
+-- mistake hides. Track 1's latest snapshot is written FIRST so it cannot.
+--
+-- This is defence in depth, not the guard: physical row order is not something
+-- Postgres promises. The guard is
+-- `test_the_oracle_dedupes_on_the_whole_composite_key`, which counts retained
+-- rows and cannot pass by accident.
 INSERT INTO daily_inventory (track_id, as_of_date, units_on_hand) VALUES
   -- track 1: rises then falls. Latest (03) = 4, earliest (01) = 10.
-  (1, '2026-01-01', 10), (1, '2026-01-02', 25), (1, '2026-01-03', 4),
+  (1, '2026-01-03', 4), (1, '2026-01-01', 10), (1, '2026-01-02', 25),
   -- track 2: latest (03) = 7, earliest (01) = 3.
   (2, '2026-01-01', 3),  (2, '2026-01-02', 5),  (2, '2026-01-03', 7),
   -- track 3: TIE on the latest date with tracks 1 and 2, so the window must

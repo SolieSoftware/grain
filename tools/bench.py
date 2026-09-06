@@ -108,6 +108,13 @@ for n in (1_000, 10_000, 100_000, 500_000, 1_000_000):
 # faster" and measured 4x SLOWER the first time anyone timed it, so the number
 # is tracked rather than asserted.
 #
+# READ THE BIG ROWS ONLY. At 1k rows the ratio was measured at 0.91x, 1.18x and
+# 1.28x on three consecutive runs of this file — run-to-run variance exceeds the
+# effect, so any figure quoted from that row is noise with a decimal point on
+# it. From 10k up it is stable (~1.6x) and at 1M it reproduces at 1.86x. This
+# warning is here because a small-input number from this file was quoted in the
+# README once and did not reproduce.
+#
 # NOT the cost with an index. `daily_inventory`'s primary key is
 # (track_id, as_of_date) precisely so the planner can feed the WindowAgg
 # pre-sorted; `generate_series` has no index at all, so what follows is the

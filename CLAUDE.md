@@ -11,7 +11,7 @@ Read `README.md` first for what it does. This file is about how to work on it.
 
 ```bash
 export GRAIN_DATABASE_URL="postgresql+psycopg://$(whoami)@localhost:5432/chinook"
-uv run pytest -q          # 545 passing, 0 skipped
+uv run pytest -q          # 552 passing, 0 skipped
 uv run ruff check src tests tools
 ```
 
@@ -21,7 +21,7 @@ chinook has none, so `uv run python tools/seed_inventory.py` creates and seeds
 produce schema as a side effect of being loaded. Its declarations therefore
 cannot live in the chinook pack either (the loader refuses an ontology naming a
 missing table, so chinook would stop loading for anyone who had not seeded);
-they are in `src/grain/domains/chinook_inventory/`. Unseeded, 16 tests skip and
+they are in `src/grain/domains/chinook_inventory/`. Unseeded, 23 tests skip and
 the rest pass — a supported state, and also the state in which nothing
 independently checks stock. Seed it.
 
@@ -29,9 +29,9 @@ Three outcomes, two of them misleading:
 
 | `GRAIN_DATABASE_URL` | result |
 |---|---|
-| unset | `382 passed, 163 skipped` — **green, and never touched a database** |
-| `postgresql://…` | `4 failed, 383 passed, 158 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
-| `postgresql+psycopg://…` | **545 passed** — the only form that runs the measured tests |
+| unset | `382 passed, 170 skipped` — **green, and never touched a database** |
+| `postgresql://…` | `4 failed, 383 passed, 165 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
+| `postgresql+psycopg://…` | **552 passed** — the only form that runs the measured tests |
 
 The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
@@ -198,7 +198,14 @@ composition algebra would make a derivation.
 - `engine/` never imports from `domains/` or an adapter. Adapters (CLI, MCP,
   agent) may import the engine, never the reverse.
 - Every failure is raised **before a connection is acquired**, except
-  `GuardTripped`.
+  `GuardTripped` — and, since the time work, a **date-valued filter**.
+  `FilterScalar` has no date member, so the ISO-string workaround compiles to
+  `invoice_date < $1::VARCHAR`, for which Postgres has no operator: that
+  failure is a raw `ProgrammingError` from the driver, not a `GrainError` at
+  all. Pinned in `tests/integration/test_shared_limits.py`. Named here because
+  an undocumented exception is how a stated invariant stops being trusted. It
+  goes away when `FilterScalar` gains a date member — a change to the agent's
+  tool schema, and so a decision of its own.
 - Plans and designs live in `docs/plans/` (dated), not `docs/superpowers/`.
 - Comments explain *why*, especially why an obvious simpler thing is wrong. The
   codebase is dense with these on purpose — they are the record of what was

@@ -3,7 +3,7 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development.** All 16 planned tasks are complete and **545 tests
+**Status: in development.** All 16 planned tasks are complete and **552 tests
 pass**. The **five critical defects** a whole-branch review found on 2026-08-18
 were fixed on 2026-08-24, each with a measured regression test at the facade —
 see *"Defects found and fixed"* below. **I3** (recursive traversal) is fixed too,
@@ -115,11 +115,14 @@ silent assumption with a field name attached.
 
 **A stock wants an index on `(group_by columns, over_time column)`.** The
 boundary is `max(t) over (partition by <group keys>)`, so without one the
-planner sorts the whole population before it can window: measured at 1.26×
-a plain `sum` on 1k rows and 1.86× on 1M, unindexed — `tools/bench.py`'s
-WINDOW shape tracks it. That cost is inherent to computing the boundary
-correctly, not a defect, but it is the cost *without* the index.
-`daily_inventory` is keyed `(track_id, as_of_date)` for exactly this reason.
+planner must sort the whole population before it can window. Unindexed, that
+costs **1.86× a plain `sum` at 1M rows** and 1.80× at 100k — reproduced across
+runs by `tools/bench.py`'s WINDOW shape, which is what tracks it. At small
+inputs the overhead is not measurable: run-to-run variance at 1k rows exceeds
+the difference, and no figure is quoted here for that reason. The cost is
+inherent to computing the boundary correctly, not a defect, but it is the cost
+*without* the index — `daily_inventory` is keyed `(track_id, as_of_date)` for
+exactly this reason.
 
 **The architecture test:** pointing grain at a second database must not require
 editing anything under `engine/`. Adding the complete Chinook pack — 10 objects,
@@ -148,7 +151,7 @@ docs/plans/                  the plans and designs this was built from
 uv venv && uv pip install -e ".[dev,mcp]"
 cp .env.example .env          # then set GRAIN_DATABASE_URL — see below
 set -a && . ./.env && set +a
-uv run pytest -q              # 545 passing, 0 skipped
+uv run pytest -q              # 552 passing, 0 skipped
 uv run ruff check src tests   # clean
 ```
 
@@ -160,9 +163,9 @@ run can end report something other than success:
 
 | `GRAIN_DATABASE_URL` | `pytest -q` |
 |---|---|
-| unset | `382 passed, 163 skipped` |
-| `postgresql://user@localhost/chinook` | `4 failed, 383 passed, 158 errors` |
-| `postgresql+psycopg://user@localhost:5432/chinook` | `545 passed` |
+| unset | `382 passed, 170 skipped` |
+| `postgresql://user@localhost/chinook` | `4 failed, 383 passed, 165 errors` |
+| `postgresql+psycopg://user@localhost:5432/chinook` | `552 passed` |
 
 Only the third form runs the measured integration tests:
 
@@ -177,7 +180,7 @@ integration test then errors at fixture setup with `ModuleNotFoundError: No modu
 named 'psycopg2'`.
 
 The unset case is the one to watch, because it reports green. **A run that skipped
-163 tests is the exact failure mode this branch exists to prevent:** four of the five
+170 tests is the exact failure mode this branch exists to prevent:** four of the five
 criticals below returned plausible wrong numbers, so every regression test for them
 asserts a measured value against the database. Skipped, they assert nothing. Check
 the skip count, not the colour.
@@ -225,7 +228,7 @@ the naive sum across dates — the wrong answer — is 1153. Three tracks share 
 latest date, deliberately, because a window that picked one row per partition
 rather than every row tied at the boundary would pass a table with no ties.
 
-Without it 16 tests skip and everything else runs.
+Without it 23 tests skip and everything else runs.
 
 ## Defects found and fixed
 
