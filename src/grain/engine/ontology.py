@@ -347,6 +347,21 @@ class Metric(BaseModel):
 
     @model_validator(mode="after")
     def _check_over_time(self) -> "Metric":
+        """What can be decided from the METRIC ALONE. The rest is the loader's.
+
+        A silent `quantity` is deliberately not judged here. The kind may be
+        inferred from the summed column's property, and this validator cannot
+        see the ontology, so BOTH directions of the rule are enforced against
+        the EFFECTIVE kind in `loader._check_quantity_kinds`:
+
+        - a silent metric whose property says stock, with no `over_time` --
+          refused there. It cannot be seen from here, and while it went
+          unrefused both engines summed a stock across time and AGREED, since
+          each triggers on the same absent `metric.over_time`.
+        - a silent metric WITH `over_time` -- also left to the loader, because
+          the alternative that refusal names ('add over_time') has to itself
+          resolve. Refusing it here would have made that advice a loop.
+        """
         if self.quantity == "stock":
             if self.over_time is None:
                 raise ValueError(
@@ -354,7 +369,7 @@ class Metric(BaseModel):
                     f"A stock does not sum across time, so it has to name which "
                     f"dimension time is."
                 )
-        elif self.over_time is not None:
+        elif self.quantity is not None and self.over_time is not None:
             raise ValueError(
                 f"metric '{self.name}' sets 'over_time' but its quantity is "
                 f"'{self.quantity}', where collapsing across time has no "

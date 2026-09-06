@@ -522,6 +522,86 @@ def _effective_quantity(onto: Ontology, metric: Metric) -> tuple[str | None, str
     return prop.quantity, f"property '{name}'"
 
 
+def _time_axes(onto: Ontology, metric: Metric) -> tuple[ObjectType | None, list[str]]:
+    """The object at this metric's grain, and its declared time axes."""
+    obj = onto.object_for_table(metric.grain)
+    if obj is None:
+        return None, []
+    return obj, sorted(n for n, p in obj.properties.items() if p.time_grain is not None)
+
+
+def _over_time_hint(onto: Ontology, metric: Metric) -> str:
+    """A repair the author can actually carry out, named concretely.
+
+    Naming a real `time_grain` property matters: `_check_time_dimensions` will
+    reject an `over_time` whose dimension is not one, so 'add over_time' on its
+    own is advice that can fail on the next load. Where no axis is declared yet,
+    the repair is honestly two steps and says so rather than pointing at a
+    property that does not exist.
+    """
+    obj, axes = _time_axes(onto, metric)
+    override = (
+        "Or, if this number genuinely accumulates across time, declare "
+        "'quantity: flow' on the metric -- a metric's own declaration wins."
+    )
+    if axes:
+        return (
+            f"Add over_time: {{dimension: {axes[0]}, choice: last}} to the "
+            f"metric; time axes declared on {obj.name}: {axes}. {override}"
+        )
+    where = f"object '{obj.name}'" if obj is not None else f"grain '{metric.grain}'"
+    return (
+        f"No property of {where} declares a 'time_grain' yet, so first mark the "
+        f"date column that orders this level with one (day, week, month, "
+        f"quarter or year), then name that property in the metric's "
+        f"'over_time'. {override}"
+    )
+
+
+def _check_over_time(
+    onto: Ontology, metric: Metric, kind: str | None, source: str
+) -> None:
+    """`over_time` is required by a stock and meaningless on anything else --
+    judged against the EFFECTIVE kind, not `metric.quantity`.
+
+    `Metric._check_over_time` enforces what a metric can decide alone. It cannot
+    see the ontology, so it never fired for the one path `_effective_quantity`
+    exists to serve: a metric that says nothing about its quantity over a
+    PROPERTY that declares `stock`. Such a metric loaded clean with no
+    `over_time`, and both engines then summed it across time -- not by
+    coincidence, but because each triggers on `metric.over_time is not None` and
+    so both read the same absent field. Two engines agreeing on a wrong answer
+    is precisely what the differential harness cannot catch, which is why this
+    has to be refused at load.
+    """
+    if kind == "stock":
+        if metric.over_time is None:
+            raise OntologyError(
+                f"metric '{metric.name}' is a stock -- {source} declares it -- "
+                f"but sets no 'over_time'. A stock is a level at an instant: it "
+                f"sums across space and not across time, so it has to name "
+                f"which dimension time is before it can be aggregated at all. "
+                f"{_over_time_hint(onto, metric)}"
+            )
+        return
+    if metric.over_time is None:
+        return
+    # Reachable only when the metric left `quantity` silent -- an explicit
+    # non-stock kind alongside `over_time` is refused by the model itself.
+    detail = (
+        f"{source} declares a {kind}, where collapsing across time has no "
+        f"meaning"
+        if kind is not None
+        else "nothing declares it a stock, and collapsing across time is "
+             "meaningful only for one"
+    )
+    raise OntologyError(
+        f"metric '{metric.name}' sets 'over_time' but {detail}. Declare "
+        f"'quantity: stock' on the metric -- a metric's own declaration wins "
+        f"over the property's -- or remove the 'over_time'."
+    )
+
+
 def _check_quantity_kinds(onto: Ontology) -> None:
     """A quantity that does not accumulate may not be summed.
 
@@ -541,9 +621,14 @@ def _check_quantity_kinds(onto: Ontology) -> None:
     read off a column.
     """
     for metric in onto.metrics.values():
+        kind, source = _effective_quantity(onto, metric)
+        # Before the accumulation rule, and for EVERY metric rather than only a
+        # sum: `over_time` is required by the kind, and a non-sum stock
+        # (`count_distinct(employee.employee_id)` -- headcount) is still a
+        # stock.
+        _check_over_time(onto, metric, kind, source)
         if metric.agg != "sum":
             continue
-        kind, source = _effective_quantity(onto, metric)
         if kind is None:
             # Only demand a declaration where one could have been inferred --
             # a bare column. Anything else was never covered by this rule.
@@ -567,9 +652,9 @@ def _check_quantity_kinds(onto: Ontology) -> None:
                 f"instant) or value_per_unit (a price, a rate, a percentage)."
             )
         if kind == "stock":
-            # A stock IS summable -- across space. `over_time` guarantees the
-            # sum never crosses time, because the window collapses to one
-            # instant before the aggregate runs. Validated above.
+            # A stock IS summable -- across space. `over_time` is what makes
+            # that true, and `_check_over_time` above has already established
+            # that this metric has one.
             continue
         if kind not in ACCUMULATES:
             raise OntologyError(

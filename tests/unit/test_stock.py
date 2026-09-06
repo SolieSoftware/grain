@@ -118,6 +118,90 @@ def test_a_stock_is_no_longer_refused_for_not_accumulating(lite_metadata):
     validate(_time_onto(_stock()), lite_metadata)
 
 
+# -- a stock INFERRED from the property, not declared on the metric ----------
+
+def _inferred_stock_onto(metric_quantity=None, over_time=None) -> Ontology:
+    """A stock declared on the PROPERTY, with a metric that says nothing.
+
+    This is the path `_effective_quantity` exists to serve, and the one
+    `Metric._check_over_time` structurally cannot see: it keys on
+    `metric.quantity`, which is None here.
+    """
+    props = {
+        "when": Property(column="invoice.invoice_date", type="datetime", time_grain="day"),
+        "balance": Property(column="invoice.total", type="decimal", quantity="stock"),
+    }
+    kw = {"quantity": metric_quantity} if metric_quantity else {}
+    if over_time is not None:
+        kw["over_time"] = over_time
+    return Ontology(
+        name="t",
+        objects={"Invoice": ObjectType(name="Invoice", primary="invoice", properties=props)},
+        metrics={"level": Metric(name="level", grain="invoice", type="decimal",
+                                 agg="sum", value="invoice.total", **kw)},
+    )
+
+
+def test_a_property_declared_stock_summed_by_a_silent_metric_is_refused(lite_metadata):
+    """The gap: `Metric._check_over_time` keys on `metric.quantity`, so a stock
+    inferred from the property never reached it and the ontology loaded clean
+    with no `over_time`. Both engines then summed it across time — and AGREED,
+    because each triggers on the same absent `metric.over_time`. Two engines
+    agreeing on a wrong answer is the one failure the differential harness
+    cannot see, so it has to be refused at load."""
+    with pytest.raises(OntologyError, match="sets no 'over_time'"):
+        validate(_inferred_stock_onto(), lite_metadata)
+
+
+def test_the_refusal_names_a_declared_time_axis(lite_metadata):
+    with pytest.raises(OntologyError) as exc:
+        validate(_inferred_stock_onto(), lite_metadata)
+    assert "when" in str(exc.value)
+
+
+def test_the_named_over_time_alternative_actually_loads(lite_metadata):
+    """The alternative the refusal names must itself resolve. Naively it did
+    not: adding `over_time` to a metric whose own `quantity` stays silent was
+    refused in turn by `Metric._check_over_time`, looping the author between two
+    errors. Checked by USING the advice, not by matching its text."""
+    validate(_inferred_stock_onto(over_time={"dimension": "when", "choice": "last"}),
+             lite_metadata)
+
+
+def test_the_named_flow_alternative_also_loads(lite_metadata):
+    """The second escape the refusal offers: the metric declaring itself a flow.
+    Precedence is one-directional, so the metric's word beats the property's."""
+    validate(_inferred_stock_onto(metric_quantity="flow"), lite_metadata)
+
+
+def test_over_time_on_a_silent_metric_over_a_flow_property_is_refused(lite_metadata):
+    """The other direction of the same rule, equally invisible to the model: the
+    effective kind is a flow, so collapsing across time means nothing."""
+    props = {
+        "when": Property(column="invoice.invoice_date", type="datetime", time_grain="day"),
+        "total": Property(column="invoice.total", type="decimal", quantity="flow"),
+    }
+    onto = Ontology(
+        name="t",
+        objects={"Invoice": ObjectType(name="Invoice", primary="invoice", properties=props)},
+        metrics={"level": Metric(name="level", grain="invoice", type="decimal", agg="sum",
+                                 value="invoice.total",
+                                 over_time={"dimension": "when", "choice": "last"})},
+    )
+    with pytest.raises(OntologyError, match="quantity: stock"):
+        validate(onto, lite_metadata)
+
+
+def test_a_non_sum_stock_still_needs_over_time():
+    """`count_distinct(employee_id)` is the textbook stock and reads no quantity
+    column at all, so it can only ever declare its kind on the metric. The check
+    therefore cannot live behind the `agg == 'sum'` guard the accumulation rule
+    uses."""
+    with pytest.raises(ValidationError, match="over_time"):
+        Metric(name="headcount", grain="employee", type="integer",
+               agg="count_distinct", value="employee.employee_id", quantity="stock")
+
+
 # -- the planning verdict ----------------------------------------------------
 
 def test_the_plan_carries_the_window(lite_metadata, chinook_lite):
