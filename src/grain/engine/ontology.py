@@ -251,6 +251,18 @@ class LinkType(BaseModel):
         return self.effective_cardinality in FANNING
 
 
+class OverTime(BaseModel):
+    """How a `stock` collapses across time.
+
+    `first | last` rather than MetricFlow's `min | max`: `window_choice: max`
+    reads as "the largest value" when it means "the value at the latest date".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    dimension: str
+    choice: Literal["first", "last"] = "last"
+
+
 class Metric(BaseModel):
     """An aggregate, declared either opaquely or structurally.
 
@@ -292,6 +304,12 @@ class Metric(BaseModel):
     is a `sum` over a bare column. A metric's own declaration always wins; see
     `loader._effective_quantity`.
     """
+    over_time: OverTime | None = None
+    """Required when `quantity: stock`, refused otherwise.
+
+    A stock sums across space and not across time, so it needs to know WHICH
+    dimension is time before it can be aggregated at all.
+    """
     description: str | None = None
     ai_context: AiContext | None = None
 
@@ -324,6 +342,23 @@ class Metric(BaseModel):
                 f"metric '{self.name}' sets 'percentile' but its agg is "
                 f"'{self.agg}', where p has no meaning. Remove it, or use "
                 f"agg: percentile."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_over_time(self) -> "Metric":
+        if self.quantity == "stock":
+            if self.over_time is None:
+                raise ValueError(
+                    f"metric '{self.name}' is a stock but sets no 'over_time'. "
+                    f"A stock does not sum across time, so it has to name which "
+                    f"dimension time is."
+                )
+        elif self.over_time is not None:
+            raise ValueError(
+                f"metric '{self.name}' sets 'over_time' but its quantity is "
+                f"'{self.quantity}', where collapsing across time has no "
+                f"meaning. Remove it, or declare quantity: stock."
             )
         return self
 

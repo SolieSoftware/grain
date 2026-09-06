@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 import yaml
-from sqlalchemy import Engine, MetaData, UniqueConstraint, text
+from sqlalchemy import Date, DateTime, Engine, MetaData, UniqueConstraint, text
 
 from .errors import OntologyError
 from .ontology import (
@@ -566,6 +566,11 @@ def _check_quantity_kinds(onto: Ontology) -> None:
                 f"it is: flow (money, counts, durations), stock (a level at an "
                 f"instant) or value_per_unit (a price, a rate, a percentage)."
             )
+        if kind == "stock":
+            # A stock IS summable -- across space. `over_time` guarantees the
+            # sum never crosses time, because the window collapses to one
+            # instant before the aggregate runs. Validated above.
+            continue
         if kind not in ACCUMULATES:
             raise OntologyError(
                 f"metric '{metric.name}' sums a quantity that {source} declares "
@@ -583,8 +588,6 @@ def _check_time_dimensions(onto: Ontology, metadata: MetaData) -> None:
     same reason order-statistic eligibility is: a declaration can be wrong, and
     the consequence here is a window over a column whose ordering means nothing.
     """
-    from sqlalchemy import Date, DateTime
-
     for obj in onto.objects.values():
         for prop_name, prop in obj.properties.items():
             if prop.time_grain is None:
@@ -600,3 +603,28 @@ def _check_time_dimensions(onto: Ontology, metadata: MetaData) -> None:
                     f"timestamp. A time axis has to order and compare "
                     f"meaningfully."
                 )
+
+    for metric in onto.metrics.values():
+        if metric.over_time is None:
+            continue
+        obj = onto.object_for_table(metric.grain)
+        ctx = f"metric '{metric.name}' over_time"
+        if obj is None:
+            raise OntologyError(
+                f"{ctx} names dimension '{metric.over_time.dimension}' but "
+                f"grain '{metric.grain}' is not the primary table of any "
+                f"declared object, so it has no properties to name."
+            )
+        prop = obj.properties.get(metric.over_time.dimension)
+        if prop is None:
+            raise OntologyError(
+                f"{ctx} names '{metric.over_time.dimension}', which is no "
+                f"property of {obj.name}. Declared: "
+                f"{sorted(obj.properties)}."
+            )
+        if prop.time_grain is None:
+            raise OntologyError(
+                f"{ctx} names '{metric.over_time.dimension}', which declares no "
+                f"time_grain. A stock collapses across TIME, so the dimension "
+                f"it names has to be a time axis."
+            )

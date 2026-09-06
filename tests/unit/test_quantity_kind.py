@@ -142,10 +142,15 @@ def test_the_real_chinook_pack_still_loads(chinook_lite):
 def test_a_metric_may_declare_its_own_quantity(lite_metadata):
     """Headcount is the textbook stock and a column-level field cannot express
     it: count_distinct(employee_id) has no quantity column, because employee_id
-    is an identifier."""
+    is an identifier.
+
+    `over_time` is required alongside `quantity: stock` (see test_stock.py) --
+    named here with a dimension that need not resolve to anything, since this
+    test never calls `validate()` and so never reaches the ontology check."""
     m = Metric(name="headcount", grain="employee", type="integer",
                agg="count_distinct", value="employee.employee_id",
-               quantity="stock")
+               quantity="stock",
+               over_time={"dimension": "hire_date", "choice": "last"})
     assert m.quantity == "stock"
 
 

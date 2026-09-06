@@ -54,3 +54,91 @@ def test_a_time_grain_on_a_non_temporal_column_is_refused(lite_metadata):
     declared one, for the same reason order statistics are."""
     with pytest.raises(OntologyError, match="not a date or timestamp"):
         validate(_time_onto(column="invoice.customer_id"), lite_metadata)
+
+
+# -- over_time ---------------------------------------------------------------
+
+def _stock(choice="last", dimension="when") -> Metric:
+    return Metric(name="level", grain="invoice", type="decimal", agg="sum",
+                  value="invoice.total", quantity="stock",
+                  over_time={"dimension": dimension, "choice": choice})
+
+
+@pytest.mark.parametrize("choice", ["first", "last"])
+def test_both_choices_are_legal(choice):
+    assert _stock(choice=choice).over_time.choice == choice
+
+
+def test_min_and_max_are_not_the_vocabulary():
+    """MetricFlow spells these min|max. `window_choice: max` reads as the
+    largest VALUE when it means the value at the latest DATE — two readings, one
+    wrong, in a field whose whole job is to disambiguate."""
+    with pytest.raises(ValidationError):
+        _stock(choice="max")
+
+
+def test_a_stock_requires_over_time():
+    with pytest.raises(ValidationError, match="over_time"):
+        Metric(name="level", grain="invoice", type="decimal", agg="sum",
+               value="invoice.total", quantity="stock")
+
+
+def test_over_time_is_refused_on_a_flow():
+    """A field meaningful for one quantity kind must be rejected elsewhere, or
+    it reads as configuration that silently does nothing."""
+    with pytest.raises(ValidationError, match="over_time"):
+        Metric(name="rev", grain="invoice", type="decimal", agg="sum",
+               value="invoice.total", quantity="flow",
+               over_time={"dimension": "when", "choice": "last"})
+
+
+def test_the_named_dimension_must_exist(lite_metadata):
+    with pytest.raises(OntologyError, match="no property"):
+        validate(_time_onto(_stock(dimension="nope")), lite_metadata)
+
+
+def test_the_named_dimension_must_declare_a_time_grain(lite_metadata):
+    """Naming a non-temporal property would window over something with no
+    meaningful order."""
+    with pytest.raises(OntologyError, match="time_grain"):
+        validate(_time_onto(_stock(dimension="total")), lite_metadata)
+
+
+def test_a_well_formed_stock_loads(lite_metadata):
+    validate(_time_onto(_stock()), lite_metadata)
+
+
+def test_a_stock_is_no_longer_refused_for_not_accumulating(lite_metadata):
+    """Task 2 left `stock` outside ACCUMULATES, so summing one was refused.
+    `over_time` is what makes it summable — the window means the sum never
+    crosses time."""
+    validate(_time_onto(_stock()), lite_metadata)
+
+
+# -- the planning verdict ----------------------------------------------------
+
+def test_the_plan_carries_the_window(lite_metadata, chinook_lite):
+    """Decided with the other verdicts rather than recomputed in compile, for
+    the same reason subquery_edges is: a window applied over a different column
+    from the one the analysis reasoned about would silently invalidate it."""
+    from grain.engine.grain import analyse
+    from grain.engine.resolve import resolve
+    from grain.engine.spec import QuerySpec
+
+    onto = _time_onto(_stock())
+    plan = analyse(resolve(QuerySpec(object="Invoice", metrics=["level"]), onto))
+    (mp,) = plan.metric_plans
+    assert mp.window is not None
+    assert mp.window.choice == "last"
+    assert mp.window.column.qualified == "invoice.invoice_date"
+
+
+def test_a_flow_carries_no_window(chinook_lite):
+    from grain.engine.grain import analyse
+    from grain.engine.resolve import resolve
+    from grain.engine.spec import QuerySpec
+
+    plan = analyse(resolve(
+        QuerySpec(object="Invoice", metrics=["invoice_total"]), chinook_lite))
+    (mp,) = plan.metric_plans
+    assert mp.window is None

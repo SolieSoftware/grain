@@ -7,10 +7,18 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .errors import NOT_ON_PATH, FanOutRefused, KeyBeyondGrain, NonAdditiveRefused
-from .ontology import Metric, ObjectType
+from .ontology import ColumnRef, Metric, ObjectType
 from .resolve import Edge, ResolvedProperty, ResolvedQuery
 
 Strategy = Literal["inline", "aggregate_then_join"]
+
+
+@dataclass(frozen=True)
+class WindowSpec:
+    """Collapse to one instant before aggregating. See `OverTime`."""
+
+    column: ColumnRef
+    choice: str
 
 
 @dataclass(frozen=True)
@@ -26,6 +34,11 @@ class MetricPlan:
     # recomputed in `compile` — a subquery that walked a different distance from
     # the one this analysis reasoned about would silently invalidate the verdict.
     subquery_edges: int = 0
+    # A stock's window, resolved to the actual column. Decided here with the
+    # other verdicts rather than recomputed in `compile`, for the same reason
+    # `subquery_edges` is: a window applied over a different column from the one
+    # this analysis reasoned about would silently invalidate the verdict.
+    window: WindowSpec | None = None
 
 
 @dataclass
@@ -366,6 +379,12 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
                 f"will not sum to the total."
             )
 
+        window = None
+        if metric.over_time is not None:
+            obj = rq.ontology.object_for_table(metric.grain)
+            prop = obj.properties[metric.over_time.dimension]
+            window = WindowSpec(column=prop.column, choice=metric.over_time.choice)
+
         plan.metric_plans.append(
             MetricPlan(
                 metric=metric,
@@ -374,6 +393,7 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
                 additive=additive,
                 non_additive_reason=non_additive_reason,
                 subquery_edges=subquery_edges,
+                window=window,
             )
         )
 
