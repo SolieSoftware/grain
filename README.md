@@ -3,7 +3,7 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development.** All 16 planned tasks are complete and **391 tests
+**Status: in development.** All 16 planned tasks are complete and **545 tests
 pass**. The **five critical defects** a whole-branch review found on 2026-08-18
 were fixed on 2026-08-24, each with a measured regression test at the facade —
 see *"Defects found and fixed"* below. **I3** (recursive traversal) is fixed too,
@@ -98,9 +98,10 @@ revenue it holds. Grouped by name they were one group of 4215.42. See **C1** and
 
 ### What the ontology must declare
 
-Two of these are load-bearing rather than descriptive, and the loader checks both
-against the database's own primary keys, unique constraints and unique indexes —
-a declaration nothing verifies is a silent assumption with a field name attached.
+These are load-bearing rather than descriptive, and the loader checks them
+against the database itself — its primary keys, unique constraints, unique
+indexes, column types and nullability. A declaration nothing verifies is a
+silent assumption with a field name attached.
 
 | Declaration | Where | Rule |
 |---|---|---|
@@ -108,6 +109,17 @@ a declaration nothing verifies is a silent assumption with a field name attached
 | `cardinality` | every **object join** | **Required, no default.** Must be non-fanning, and the `to` side must be a key the database enforces. A fanning object join is refused: model it as a link |
 | `unique` | a **property** | Declares that it identifies one row of its object. Required in the `group_by` of any non-additive query, and what lets a fanning hop be answered inline |
 | `max_depth` | a **recursive link** | How far a traversal walks the chain. `1` on a hop means the immediate parent only |
+| `quantity` | a **property**, or a **metric** | `flow \| stock \| value_per_unit`. Decides whether the number accumulates at all. The metric's own word wins where both speak |
+| `time_grain` | a **property** | Declares it is a time axis. Checked against the reflected column: must be temporal, and must be `NOT NULL` — a NULL instant has no answer to restore, and matching NULL to NULL would invent an instant nothing declares |
+| `over_time` | a **stock metric** | `{dimension, choice: first\|last}` — which instant a level collapses to. Required on a stock and refused on anything else |
+
+**A stock wants an index on `(group_by columns, over_time column)`.** The
+boundary is `max(t) over (partition by <group keys>)`, so without one the
+planner sorts the whole population before it can window: measured at 1.26×
+a plain `sum` on 1k rows and 1.86× on 1M, unindexed — `tools/bench.py`'s
+WINDOW shape tracks it. That cost is inherent to computing the boundary
+correctly, not a defect, but it is the cost *without* the index.
+`daily_inventory` is keyed `(track_id, as_of_date)` for exactly this reason.
 
 **The architecture test:** pointing grain at a second database must not require
 editing anything under `engine/`. Adding the complete Chinook pack — 10 objects,
@@ -122,6 +134,7 @@ src/grain/engine/            ontology · loader · spec · resolve · grain · c
 src/grain/engine_symmetric/  the second engine: its own resolve · grain · compile · symmetric
 src/grain/agent/             the chat agent: session · tools · prompt · cli
 src/grain/domains/chinook/   models.py (generated) · ontology.yaml
+src/grain/domains/chinook_inventory/  the stock pack: ontology.yaml · inventory.sql (opt-in)
 tests/unit/                  compile-to-SQL, no database
 tests/integration/           against a loaded chinook, anchored on measured values
 tools/                       the oracle and the evaluation harnesses (not the test suite)
@@ -135,7 +148,7 @@ docs/plans/                  the plans and designs this was built from
 uv venv && uv pip install -e ".[dev,mcp]"
 cp .env.example .env          # then set GRAIN_DATABASE_URL — see below
 set -a && . ./.env && set +a
-uv run pytest -q              # 391 passing
+uv run pytest -q              # 545 passing, 0 skipped
 uv run ruff check src tests   # clean
 ```
 
@@ -147,9 +160,9 @@ run can end report something other than success:
 
 | `GRAIN_DATABASE_URL` | `pytest -q` |
 |---|---|
-| unset | `270 passed, 121 skipped` |
-| `postgresql://user@localhost/chinook` | `4 failed, 271 passed, 116 errors` |
-| `postgresql+psycopg://user@localhost:5432/chinook` | `391 passed` |
+| unset | `382 passed, 163 skipped` |
+| `postgresql://user@localhost/chinook` | `4 failed, 383 passed, 158 errors` |
+| `postgresql+psycopg://user@localhost:5432/chinook` | `545 passed` |
 
 Only the third form runs the measured integration tests:
 
@@ -164,7 +177,7 @@ integration test then errors at fixture setup with `ModuleNotFoundError: No modu
 named 'psycopg2'`.
 
 The unset case is the one to watch, because it reports green. **A run that skipped
-121 tests is the exact failure mode this branch exists to prevent:** four of the five
+163 tests is the exact failure mode this branch exists to prevent:** four of the five
 criticals below returned plausible wrong numbers, so every regression test for them
 asserts a measured value against the database. Skipped, they assert nothing. Check
 the skip count, not the colour.
@@ -186,6 +199,33 @@ grep -v -E '^(DROP DATABASE|CREATE DATABASE|\\c chinook_serial)' \
 
 The database is Chinook v1.4.5, loaded from `Chinook_PostgreSql_SerialPKs.sql`
 (the snake_case variant; the default port uses quoted CamelCase).
+
+### Optional: the stock table
+
+chinook has no level, balance or snapshot column — all three of its datetime
+columns are event stamps — so there is nothing in it a `stock` metric can be
+measured against. One small table adds one:
+
+```bash
+uv run python tools/seed_inventory.py     # daily_inventory seeded: 8 rows
+```
+
+Re-runnable, and **opt-in on purpose**. Until now a domain pack only *described*
+a database it did not own; this SQL makes a pack a producer of schema, which is
+not something `Grain.load` should ever do to someone's database. It follows that
+the declarations naming `daily_inventory` cannot sit in the chinook pack either
+— the loader refuses an ontology naming a table that is not there, so chinook
+would stop loading for anyone who had not run this. They live in
+`src/grain/domains/chinook_inventory/` instead, a pack you load only once you
+have seeded it.
+
+Eight rows over three dates, small enough that every figure the tests assert is
+computable by hand: the level at the last instant is 111, at the first 1012, and
+the naive sum across dates — the wrong answer — is 1153. Three tracks share the
+latest date, deliberately, because a window that picked one row per partition
+rather than every row tied at the boundary would pass a table with no ties.
+
+Without it 16 tests skip and everything else runs.
 
 ## Defects found and fixed
 
@@ -326,8 +366,9 @@ limit in the BI literature, measured here against chinook.
 
 | Limitation | What happens |
 |---|---|
-| ~~A quantity that was never additive~~ | **Fixed.** A property declares `quantity: extensive \| rate \| ratio`, and the loader refuses a `sum` over one that does not accumulate. Only bare-column values are inspected, so `sum(price * qty)` stays legal. |
-| **Semi-additive quantities** | A balance sums across accounts but not across time. grain has no time-dimension concept, so it cannot express the constraint. |
+| ~~A quantity that was never additive~~ | **Fixed.** A property declares `quantity: flow \| stock \| value_per_unit`, and the loader refuses a `sum` over one that does not accumulate. Only bare-column values are inspected, so `sum(price * qty)` stays legal. |
+| ~~Semi-additive quantities~~ | **Fixed, for one instant.** `quantity: stock` plus `over_time: {dimension, choice: first\|last}` windows to one instant before aggregating, so a level sums across accounts and never across time. What is *not* fixed is any period other than "now": see below. |
+| **A time axis nobody can filter on** | `FilterScalar` is `str \| int \| float \| bool`. A `datetime.date` is refused at the spec boundary; the ISO-string workaround compiles to `invoice_date < $1::VARCHAR`, which Postgres has no operator for. So "inventory at the end of March" is inexpressible — the window can pick an instant, nothing can restrict the population to March first. |
 | **Overlapping groups** | Revenue by playlist sums to 5738.28 against a true 2328.60. Both flag `additive: false`; neither can give a correct total. |
 | **Branching traversal** | `traverse` is a path, not a tree, so the chasm trap is inexpressible. Both refuse — with an error that describes a chain, not the branch that was asked for. |
 | ~~Medians and percentiles~~ | **Fixed.** `agg: median` and `agg: percentile` are native to both engines. The cited impossibility — "no distinct-sum rewrite" — rules out *that* rewrite, not every encoding. `percentile_cont` remains a non-goal. |

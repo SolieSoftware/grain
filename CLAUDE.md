@@ -11,17 +11,27 @@ Read `README.md` first for what it does. This file is about how to work on it.
 
 ```bash
 export GRAIN_DATABASE_URL="postgresql+psycopg://$(whoami)@localhost:5432/chinook"
-uv run pytest -q          # 391 passing
+uv run pytest -q          # 545 passing, 0 skipped
 uv run ruff check src tests tools
 ```
+
+**One table is not shipped with chinook.** A `stock` needs a level column and
+chinook has none, so `uv run python tools/seed_inventory.py` creates and seeds
+`daily_inventory` — re-runnable, and opt-in because a domain pack must never
+produce schema as a side effect of being loaded. Its declarations therefore
+cannot live in the chinook pack either (the loader refuses an ontology naming a
+missing table, so chinook would stop loading for anyone who had not seeded);
+they are in `src/grain/domains/chinook_inventory/`. Unseeded, 16 tests skip and
+the rest pass — a supported state, and also the state in which nothing
+independently checks stock. Seed it.
 
 Three outcomes, two of them misleading:
 
 | `GRAIN_DATABASE_URL` | result |
 |---|---|
-| unset | `270 passed, 121 skipped` — **green, and never touched a database** |
-| `postgresql://…` | `4 failed, 271 passed, 116 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
-| `postgresql+psycopg://…` | **391 passed** — the only form that runs the measured tests |
+| unset | `382 passed, 163 skipped` — **green, and never touched a database** |
+| `postgresql://…` | `4 failed, 383 passed, 158 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
+| `postgresql+psycopg://…` | **545 passed** — the only form that runs the measured tests |
 
 The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
@@ -90,7 +100,11 @@ In order of strength:
 1. **`tools/oracle.py`** — computes answers in pure Python from raw rows,
    sharing no SQL with either engine. This is the only check that cannot inherit
    a misconception from the code it is checking. Use it whenever you touch
-   aggregation.
+   aggregation. For a `stock` it is not the strongest check, it is the ONLY one:
+   the symmetric engine refuses the shape, so (2) below is blind to it.
+   Extending it costs an entry in `METRICS` and, if the grain table's key is
+   composite, a tuple in `PK` — registering one column of a composite key does
+   not fail, it silently answers a smaller question.
 2. **`tests/integration/test_engine_agreement.py`** — both engines, same corpus,
    identical rows asserted.
 3. **The measured anchors** (`test_measured_anchors.py`, `test_defect_anchors.py`,
@@ -110,18 +124,30 @@ you think you have fixed one, you must delete a test, not just assert it.
 **Fixed, and the test was deleted rather than inverted.** grain used to validate
 a metric's *grain* — that its rows are not replicated — with no concept of
 whether the *quantity* accumulated, so `sum(track.unit_price)` came back perfect
-and meaningless. A property now declares `quantity: extensive | rate | ratio`
+and meaningless. A property now declares `quantity: flow | stock | value_per_unit`
 and the loader refuses a `sum` over one that does not accumulate.
 
 The rule is deliberately narrow: it inspects a summed value only when that value
-is a BARE column. `sum(a * b)` is left alone, because a rate times a count IS
-extensive — `revenue` is exactly that shape, and a cruder rule would refuse it.
+is a BARE column. `sum(a * b)` is left alone, because a value-per-unit times a
+count IS a flow — `revenue` is exactly that shape, and a cruder rule would refuse it.
 Opaque `expr` metrics are skipped entirely; nothing can tell whether they sum.
 
-Still open: **semi-additive** quantities (a balance, an inventory level) that
-sum across accounts but not across time. dbt's MetricFlow models this with
-`non_additive_dimension`; grain has no time-dimension concept, so this needs a
-subsystem rather than a field.
+**Semi-additive quantities are no longer open — for one instant.** A level
+(`quantity: stock`) declares `over_time: {dimension, choice: first|last}`, and
+the subquery engine windows to that instant before aggregating, so it sums
+across accounts and never across time. dbt's MetricFlow spells the same thing
+`non_additive_dimension`; the vocabulary here is `first|last` rather than
+`min|max` because `window_choice: max` reads as the largest VALUE when it means
+the value at the latest DATE.
+
+Three things that leaves standing. **The symmetric engine refuses a stock** —
+the window needs a window function inside a subquery and that engine is one
+pass — so the differential harness cannot see this path at all and
+`tools/oracle.py` is the only independent judge of it. **No period other than
+"now" is expressible**: `FilterScalar` has no date member, so nothing can
+restrict the population to March before windowing (pinned in
+`test_shared_limits.py`). And `time_grain` is verified against the column but
+its granularity meaning is still unused.
 
 Also standing: the symmetric encoding's `|v| < 5e29` bound is checked only at
 load, so data written later can cross it silently. This is the design's weakest

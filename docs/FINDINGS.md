@@ -136,6 +136,35 @@ asserting "an EXISTS is present" would have passed.
 partitions — assert the *answer*, never the shape. An uncorrelated correlated
 subquery is valid SQL with a constant result, and it looks right in a plan.
 
+### The mitigation for a lost cross-check was named, cited, and did not exist
+
+The symmetric engine refuses a `stock` by design — the window needs a subquery
+and that engine is one pass — so the differential harness cannot check stock at
+all. The design accepted that loss explicitly, on the stated ground that
+`tools/oracle.py` would check it instead. A test docstring then said, in prose,
+that *"the oracle is the only independent judge for it"*.
+
+The oracle had no stock code. Its metric support stopped at `revenue` and
+`units_sold`. For several commits the branch had **neither** independent check
+on stock windowing, while carrying a sentence asserting it had one — and the
+sentence was inside a passing test.
+
+**Transferable:** when a design trades away a verification, the replacement is
+part of the same change, not a later task. A named mitigation is easy to cite
+and easy not to build, and prose describing a test is not a test.
+
+### A dedup key narrower than the real one deletes the thing under test
+
+The oracle dedupes grain rows on one primary-key column. `daily_inventory` is
+keyed `(track_id, as_of_date)`; registering `track_id` alone would have kept one
+row per track, collapsed every date, and produced an oracle that agreed with a
+correct engine for entirely the wrong reason — and would have gone on agreeing
+with an engine that had stopped windowing.
+
+**Transferable:** a dedup key narrower than the real one does not fail, it
+silently answers a smaller question. Check the arity of the key whenever an
+oracle meets a table it has not seen before.
+
 ## Modelling
 
 ### Validating the grain of a metric says nothing about whether the quantity is additive
@@ -189,6 +218,25 @@ would admit an inexact column into an encoding that depends on exactness.
 **Transferable:** where a declaration and the schema can disagree, and the
 consequence is a wrong number, read the schema. grain already did this for
 cardinality, uniqueness and nullability; the same rule applies to precision.
+
+### A pack that describes a table it also creates is two different things
+
+chinook ships no level column, so `stock` needed one seeded. The plan put the
+new `Inventory` object into `chinook/ontology.yaml`, which reads naturally and
+does not work: the loader refuses an ontology naming a table the database does
+not have, so the entire chinook pack — every test, the CLI's default domain, the
+agent — would have failed to load on any machine where the opt-in seed had not
+been run. The pack would have acquired a hard dependency on a tool that is, by
+design, optional.
+
+Splitting it into its own pack was the whole fix. `Inventory` lives in
+`domains/chinook_inventory/`, alongside the SQL that creates its table, and a
+caller loads it only after seeding.
+
+**Transferable:** the rule "a domain pack describes a database it does not own"
+has a corollary nobody stated — a pack that *does* ship schema cannot be the
+same pack as one that must load without it. Opt-in schema needs an opt-in
+ontology to name it.
 
 ---
 

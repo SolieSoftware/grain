@@ -360,7 +360,13 @@ def test_the_symmetric_engine_refuses_a_stock(lite_metadata):
     function inside a subquery, and that engine is one pass over the join.
 
     The cost is real: the differential harness cannot cross-check stock, so the
-    oracle is the only independent judge for it."""
+    oracle is the only independent judge for it. That judgement is made in
+    `tests/integration/test_stock_anchors.py`, by
+    `test_the_oracle_agrees_with_the_engine`, against a `tools/oracle.py` that
+    collapses to the boundary instant in pure Python and shares no SQL with
+    either engine. This sentence stood here while the oracle had no stock
+    support at all and the claim was simply false; if that check is ever
+    removed, this claim goes with it."""
     from grain.engine.errors import MetricNotSymmetric
     from grain.engine_symmetric.symmetric import require_eligible
 
