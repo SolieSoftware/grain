@@ -184,20 +184,6 @@ Small next to the others, and it composes with item 2 rather than competing.
 
 ---
 
-## Not doing, and why
-
-**Object-storage substrate.** Foundry's fan-out immunity comes from not having
-rows at the query surface. Adopting that wholesale means giving up arbitrary
-traversal, which is grain's reason to exist. Item 4 takes the idea where it is
-provably equivalent and no further.
-
-**Cardinality refusal in a generated typed client.** Foundry's OSDK makes
-`.selectProperty()` across a many-link a compile error — the strictest
-cardinality-driven refusal found anywhere. But it reads a declaration nobody
-verified, so it is confident about something unchecked. grain refuses at compile
-time with an error naming a resolving alternative, against a declaration the
-loader has verified. That is the better trade for now.
-
 ## 7. Publish stock-ness as a structured field
 
 `src/grain/engine/describe.py` tells the agent that a `sum` over a level is
@@ -215,3 +201,40 @@ which is `QuerySpec.model_json_schema()` and is deliberately identical to the
 contract the engine enforces. Publishing a field on the *described metric* is not
 a change to the *query* schema, so the constraint may not actually bind. Check
 that before designing.
+
+## 8. `_group_key` cannot see the links, so it misdiagnoses a bad qualifier
+
+Fourth instance of one defect class, and the last one still open.
+
+`group_by=["Customer.name"]`, where `Customer` is neither the query's root object
+nor any traversed link, advises *"add the Customer hop to traverse"* — which
+fails with `UnknownName: Unknown link 'Customer'`. The later alternatives in the
+same message do name real links, so the reader recovers; it costs a turn, never a
+wrong number.
+
+**Pre-existing.** The same line is on `main`; the stock branch did not introduce
+it. It survived because `_group_key` has no view of `onto.links` and so cannot
+tell "a link you did not traverse" from "not a link at all". Fixing it is a
+signature change in **both** copied resolvers (`engine/resolve.py` and
+`engine_symmetric/resolve.py` — deliberately duplicated, so a fix to one is not a
+fix to the other).
+
+The pattern is worth naming, since it has now appeared four times on one feature:
+**an error that guesses at the user's intent will eventually guess wrong, and a
+confident wrong guess is worse than an honest "I don't know what you meant."**
+Each instance was caught the same way — by building and running the alternative
+the message named, never by reading the message.
+
+## Not doing, and why
+
+**Object-storage substrate.** Foundry's fan-out immunity comes from not having
+rows at the query surface. Adopting that wholesale means giving up arbitrary
+traversal, which is grain's reason to exist. Item 4 takes the idea where it is
+provably equivalent and no further.
+
+**Cardinality refusal in a generated typed client.** Foundry's OSDK makes
+`.selectProperty()` across a many-link a compile error — the strictest
+cardinality-driven refusal found anywhere. But it reads a declaration nobody
+verified, so it is confident about something unchecked. grain refuses at compile
+time with an error naming a resolving alternative, against a declaration the
+loader has verified. That is the better trade for now.
