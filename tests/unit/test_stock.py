@@ -202,6 +202,27 @@ def test_a_non_sum_stock_still_needs_over_time():
                agg="count_distinct", value="employee.employee_id", quantity="stock")
 
 
+# -- a typo must be a typo, not a semantic change ----------------------------
+
+def test_a_misspelled_over_time_is_refused():
+    """`OverTime` forbids extras; `Metric` did not. So `overtime: {...}` parsed
+    cleanly, left `over_time` None, and produced a metric that reported
+    `additive: true` and summed a stock across time. The misspelling was not a
+    misspelling — it was a different declaration."""
+    with pytest.raises(ValidationError, match="overtime"):
+        Metric(name="level", grain="invoice", type="decimal", agg="sum",
+               value="invoice.total", quantity="flow",
+               overtime={"dimension": "when", "choice": "last"})
+
+
+def test_a_misspelled_time_grain_is_refused():
+    """Same failure on the property side: `time_grian` left the property not a
+    time axis at all, so any stock naming it was refused for the wrong
+    reason."""
+    with pytest.raises(ValidationError, match="time_grian"):
+        Property(column="invoice.invoice_date", type="datetime", time_grian="day")
+
+
 # -- the planning verdict ----------------------------------------------------
 
 def test_the_plan_carries_the_window(lite_metadata, chinook_lite):

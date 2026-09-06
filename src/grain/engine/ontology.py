@@ -155,8 +155,15 @@ class Property(BaseModel):
     name, merged them and double-counted every track they both held (defect
     C2). `grain.analyse` now requires a unique key on any non-additive query, so
     this flag is load-bearing rather than documentation.
+
+    `extra="forbid"` because every optional field here CHANGES A VERDICT when
+    present and is silently absent when not. Without it `time_grian: day`
+    parsed happily and left `time_grain` None, so a typo was not a typo but a
+    semantic change: the property stopped being a time axis, and any stock
+    naming it was refused for a reason that pointed at the wrong thing.
     """
 
+    model_config = ConfigDict(extra="forbid")
     column: ColumnRef
     type: ValueType
     nullable: bool = False
@@ -280,8 +287,14 @@ class Metric(BaseModel):
     have two renderings and no rule saying which wins; a metric with neither
     would compile to `literal_column(None)` deep inside the compiler instead of
     failing at the door.
+
+    `extra="forbid"` for the same reason `OverTime` carries it, and it is not
+    cosmetic: `overtime: {...}` used to parse, leaving `over_time` None, so a
+    misspelling produced a metric that reported `additive: true` and summed a
+    stock across time. A typo has to be a typo, not a different declaration.
     """
 
+    model_config = ConfigDict(extra="forbid")
     name: str
     grain: str
     type: ValueType
