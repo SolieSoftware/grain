@@ -8,10 +8,11 @@ import typing
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import Column, DateTime, Integer, MetaData, Numeric, Table
 
 from grain.engine.errors import OntologyError
 from grain.engine.loader import validate
-from grain.engine.ontology import AggFunc, Metric, ObjectType, Ontology, Property
+from grain.engine.ontology import AggFunc, LinkType, Metric, ObjectType, Ontology, Property
 
 
 def _time_onto(metric: Metric | None = None, grain: str | None = "day",
@@ -270,30 +271,91 @@ def test_two_windowed_stocks_are_refused(lite_metadata):
         compile_query(rq, analyse(rq), lite_metadata)
 
 
-def test_a_windowed_stock_forced_into_aggregate_then_join_is_refused(lite_metadata):
-    """The window wraps `stmt`; `aggregate_then_join` pre-aggregates this
-    metric in an entirely separate subquery built fresh from the root, which
-    the wrap never touches. Combining the two would silently sum across time
-    in that untouched subquery. Built by hand, since no ontology in this file
-    forces a root-grain stock through that strategy -- this checks the guard
-    directly rather than waiting for a query shape that may never arise."""
+def _recursive_stock_onto() -> Ontology:
+    """A recursive self-link, mirroring the shipped `Employee_Manager` link,
+    plus a time dimension and a root-grain stock -- built fresh here because
+    no existing fixture combines recursion with a time axis."""
+    props = {
+        "id": Property(column="employee.employee_id", type="integer", unique=True),
+        "when": Property(column="employee.hired_at", type="datetime", time_grain="day"),
+    }
+    metric = Metric(name="level", grain="employee", type="decimal", agg="sum",
+                    value="employee.level_amt", quantity="stock",
+                    over_time={"dimension": "when", "choice": "last"})
+    return Ontology(
+        name="t",
+        objects={"Employee": ObjectType(name="Employee", primary="employee",
+                                        properties=props)},
+        links={"Employee_Manager": LinkType(
+            name="Employee_Manager", **{"from": "Employee"}, to="Employee",
+            kind="recursive",
+            on=[{"from": "employee.reports_to", "to": "employee.employee_id"}],
+            cardinality="many_to_one", max_depth=10,
+        )},
+        metrics={"level": metric},
+    )
+
+
+def _recursive_stock_metadata() -> MetaData:
+    md = MetaData()
+    Table(
+        "employee", md,
+        Column("employee_id", Integer, primary_key=True, nullable=False),
+        Column("reports_to", Integer),
+        Column("hired_at", DateTime, nullable=False),
+        Column("level_amt", Numeric, nullable=False),
+    )
+    return md
+
+
+def test_a_windowed_stock_forced_into_aggregate_then_join_is_refused():
+    """A recursive traversal fans out beyond the metric's own (root) grain,
+    forcing aggregate_then_join -- which the window cannot reach, since that
+    strategy pre-aggregates in its own subquery built fresh from the root."""
     from grain.engine.compile import compile_query
     from grain.engine.errors import GrainError
-    from grain.engine.grain import GrainPlan, MetricPlan, WindowSpec
-    from grain.engine.ontology import ColumnRef
+    from grain.engine.grain import analyse
     from grain.engine.resolve import resolve
-    from grain.engine.spec import QuerySpec
+    from grain.engine.spec import Hop, QuerySpec
 
-    metric = _stock()
-    onto = _time_onto(metric)
-    rq = resolve(QuerySpec(object="Invoice", metrics=["level"]), onto)
-    forced_plan = GrainPlan(metric_plans=[MetricPlan(
-        metric=metric, strategy="aggregate_then_join",
-        window=WindowSpec(column=ColumnRef(table="invoice", column="invoice_date"),
-                          choice="last"),
-    )])
+    onto = _recursive_stock_onto()
+    md = _recursive_stock_metadata()
+    rq = resolve(QuerySpec(object="Employee", metrics=["level"],
+                           traverse=[Hop(link="Employee_Manager")]), onto)
     with pytest.raises(GrainError, match="aggregate-then-join"):
-        compile_query(rq, forced_plan, lite_metadata)
+        compile_query(rq, analyse(rq), md)
+
+
+def test_the_named_alternative_actually_resolves_the_recursive_case():
+    """The bug this guards against: the root's own unique key, unqualified --
+    the natural first reading of "pin the fanning edge" -- looks like it
+    should work and does not, looping the reader back to the same refusal.
+    Checked by actually USING the alternative the error names, not by matching
+    a substring of the error text -- that distinction is the whole reason the
+    original bug slipped through."""
+    from grain.engine.compile import compile_query
+    from grain.engine.errors import GrainError
+    from grain.engine.grain import analyse
+    from grain.engine.resolve import resolve
+    from grain.engine.spec import Hop, QuerySpec
+
+    onto = _recursive_stock_onto()
+    md = _recursive_stock_metadata()
+
+    wrong = resolve(QuerySpec(object="Employee", metrics=["level"],
+                              traverse=[Hop(link="Employee_Manager")],
+                              group_by=["id"]), onto)
+    with pytest.raises(GrainError) as exc:
+        compile_query(wrong, analyse(wrong), md)
+    keyed = [a for a in exc.value.alternatives if a.startswith("group_by ")]
+    assert keyed, f"no group_by alternative offered: {exc.value.alternatives}"
+    key = keyed[0].split("'")[1]
+    assert key != "id", "must be qualified through the fanning edge, not the root's own key"
+
+    fixed = resolve(QuerySpec(object="Employee", metrics=["level"],
+                              traverse=[Hop(link="Employee_Manager")],
+                              group_by=[key]), onto)
+    compile_query(fixed, analyse(fixed), md)  # must not raise
 
 
 def test_an_opaque_stock_is_refused_when_windowed(lite_metadata):
@@ -312,6 +374,35 @@ def test_an_opaque_stock_is_refused_when_windowed(lite_metadata):
     onto = _time_onto(metric)
     rq = resolve(QuerySpec(object="Invoice", metrics=["level"]), onto)
     with pytest.raises(GrainError, match="opaque"):
+        compile_query(rq, analyse(rq), lite_metadata)
+
+
+def test_a_group_key_named_like_the_reserved_bookkeeping_columns_is_refused(lite_metadata):
+    """`__grain_value`/`__grain_t`/`__grain_pick` are reserved for the wrap's
+    own bookkeeping columns. Nothing stops an ontology from naming a real
+    PROPERTY the same way -- that reservation only ever guarded a physical
+    column -- so the collision is checked explicitly and raises `GrainError`
+    rather than falling through to SQLAlchemy's own ambiguous-label
+    `InvalidRequestError`."""
+    from grain.engine.compile import compile_query
+    from grain.engine.errors import GrainError
+    from grain.engine.grain import analyse
+    from grain.engine.resolve import resolve
+    from grain.engine.spec import QuerySpec
+
+    props = {
+        "when": Property(column="invoice.invoice_date", type="datetime", time_grain="day"),
+        "total": Property(column="invoice.total", type="decimal", quantity="flow"),
+        "__grain_value": Property(column="invoice.customer_id", type="integer"),
+    }
+    onto = Ontology(
+        name="t",
+        objects={"Invoice": ObjectType(name="Invoice", primary="invoice", properties=props)},
+        metrics={"level": _stock()},
+    )
+    rq = resolve(QuerySpec(object="Invoice", metrics=["level"],
+                           group_by=["__grain_value"]), onto)
+    with pytest.raises(GrainError, match="reserves for its own bookkeeping"):
         compile_query(rq, analyse(rq), lite_metadata)
 
 

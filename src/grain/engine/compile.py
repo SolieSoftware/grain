@@ -44,9 +44,15 @@ _DEPTH = "__grain_depth"
 _PATH = "__grain_path"
 
 # Bookkeeping columns on the window-to-boundary wrap (`_window_to_boundary`).
-# Same double-underscore reservation, same reason: the wrap re-exposes the
-# metric's grain table under its own column names, and a table with a `value`
-# or `t` or `pick` column would otherwise be shadowed silently.
+# Double-underscoring guards a physical COLUMN of the wrapped table -- a real
+# `value`/`t`/`pick` column exported into the subquery can never collide with
+# one of these, the same guarantee `_START`/`_DEPTH`/`_PATH` give the
+# recursive CTE above. It does NOT, on its own, guard a group_by PROPERTY
+# whose declared NAME happens to equal one of these reserved strings -- that
+# is a name in the ONTOLOGY, not a column in the DATABASE, and nothing stops
+# an author from choosing it. `_window_to_boundary` checks for that
+# collision explicitly and raises `GrainError`, rather than letting it fall
+# through to SQLAlchemy's own ambiguous-label `InvalidRequestError`.
 _GRAIN_VALUE = "__grain_value"
 _GRAIN_T = "__grain_t"
 _GRAIN_PICK = "__grain_pick"
@@ -796,6 +802,18 @@ def _window_to_boundary(
             f"nothing separable to isolate.",
             [f"declare '{metric.name}' with 'agg' and 'value' instead of 'expr'"],
         )
+    reserved = {_GRAIN_VALUE, _GRAIN_T, _GRAIN_PICK}
+    collisions = sorted(rp.name for rp in rq.group_by if rp.name in reserved)
+    if collisions:
+        # An ontology could genuinely name a property this way -- nothing
+        # stops it -- and grouping by it would otherwise collide with the
+        # wrap's own bookkeeping columns below and surface as a raw
+        # SQLAlchemy `InvalidRequestError` instead of a `GrainError`.
+        raise GrainError(
+            f"group_by {collisions} collides with a name '{metric.name}'s "
+            f"window reserves for its own bookkeeping ({sorted(reserved)}).",
+            ["rename the colliding property so it does not start with '__grain_'"],
+        )
     time_col = _column(metadata, mp.window.column.table, mp.window.column.column)
     pick = func.max if mp.window.choice == "last" else func.min
     partition = [scope.column(rp) for rp in rq.group_by]
@@ -894,17 +912,42 @@ def compile_query(rq: ResolvedQuery, plan: GrainPlan, metadata: MetaData) -> Sel
             # `stmt` -- wrapping `stmt` here leaves that subquery's own sum
             # untouched, which would silently sum across time. Refused rather
             # than answering the wrong number.
+            #
+            # The alternative offered has to actually resolve (CLAUDE.md's
+            # first rule). A generic "add a group_by key that pins the fanning
+            # edge" does not: pinning requires a unique key qualified AT that
+            # edge's own position (`grain._pinned_by_a_unique_key`), and the
+            # natural first reading -- the ROOT's own unique key, unqualified
+            # -- looks like it should work and does not, looping the reader
+            # back to this same refusal (measured on a recursive link, where
+            # this is exactly what a reviewer tried). Naming the qualified key
+            # this query actually needs removes that trap; where the fanning
+            # edge's target declares no unique property at all, pinning is
+            # genuinely impossible and the message says so instead of
+            # inventing an alternative.
+            edge = next(e for e in rq.path if e.link.name == window_mp.forced_by)
+            candidates = sorted(
+                f"{edge.link.name}.{name}"
+                for name, prop in edge.to_object.properties.items()
+                if prop.unique
+            )
+            if candidates:
+                alternatives = [f"group_by '{key}'" for key in candidates]
+            else:
+                alternatives = [
+                    f"declare a unique property on {edge.to_object.name} to "
+                    f"group by -- none exists, so no group_by key can pin "
+                    f"'{edge.link.name}' today"
+                ]
+            alternatives.append("ask for this metric in a separate, simpler query")
             raise GrainError(
                 f"'{window_mp.metric.name}' is a stock windowed to one "
                 f"instant, but this query forces it through aggregate-then-"
-                f"join (a fanning edge beyond '{window_mp.metric.grain}' is "
-                f"not pinned by a unique key). That strategy pre-aggregates "
-                f"in its own subquery, which the window cannot reach, so "
-                f"combining them would silently sum across time.",
-                [
-                    "add a group_by key that pins the fanning edge",
-                    "ask for this metric in a separate, simpler query",
-                ],
+                f"join ('{edge.link.name}' fans out and is not pinned by a "
+                f"unique key at its own position). That strategy pre-"
+                f"aggregates in its own subquery, which the window cannot "
+                f"reach, so combining them would silently sum across time.",
+                alternatives,
             )
         stmt = _window_to_boundary(stmt, scope, metadata, rq, window_mp)
 
