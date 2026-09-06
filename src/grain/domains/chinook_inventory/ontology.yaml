@@ -33,6 +33,63 @@ objects:
       track: {column: daily_inventory.track_id, type: integer}
       units: {column: daily_inventory.units_on_hand, type: integer, quantity: stock}
 
+  # Track and InvoiceLine are declared AGAIN here, not shared with the chinook
+  # pack. `Grain.load` takes one directory and one `ontology.yaml`, so there is
+  # no cross-pack link and no merge — but none is needed. A pack may declare
+  # any object it wants to link to, and re-declaring these two costs eight
+  # lines while keeping the property that made the split necessary: chinook
+  # never names `daily_inventory`, so it still loads on an unseeded database.
+  #
+  # They exist so a stock can be measured ACROSS A FAN. Without them the only
+  # queries reaching `daily_inventory` are rooted on it with no traversal, and
+  # the interaction between a window and a replicating join — the thing most
+  # likely to be wrong — has no measured anchor at all.
+  Track:
+    primary: track
+    title_property: name
+    description: A purchasable audio track. Owns the inventory snapshots.
+    properties:
+      id: {column: track.track_id, type: integer, unique: true}
+      name: {column: track.name, type: string}
+
+  InvoiceLine:
+    primary: invoice_line
+    description: >
+      One line of a purchase. Present only to fan the traversal: a track sells
+      many times, and each sale replicates that track's inventory rows.
+    properties:
+      id: {column: invoice_line.invoice_line_id, type: integer, unique: true}
+
+links:
+  Inventory_Track:
+    from: Inventory
+    to: Track
+    kind: direct
+    on: [{from: daily_inventory.track_id, to: track.track_id}]
+    cardinality: many_to_one
+    description: The track a snapshot is about. Does not fan out.
+
+  Track_Inventory:
+    from: Track
+    to: Inventory
+    kind: direct
+    on: [{from: track.track_id, to: daily_inventory.track_id}]
+    cardinality: one_to_many
+    inverse_of: Inventory_Track
+    description: >
+      The snapshots for a track. Fans out — one track, many dates — which is
+      precisely what `over_time` collapses.
+
+  Track_InvoiceLines:
+    from: Track
+    to: InvoiceLine
+    kind: direct
+    on: [{from: track.track_id, to: invoice_line.track_id}]
+    cardinality: one_to_many
+    description: >
+      The sales of a track. Fans out BEYOND the stock's grain, which is the
+      shape that forces aggregate_then_join and so cannot carry a window.
+
 metrics:
   inventory_level:
     grain: daily_inventory

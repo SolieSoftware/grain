@@ -30,6 +30,11 @@ LINKS = {
     "Invoice_Lines": [("invoice", "invoice_id", "invoice_line", "invoice_id")],
     "Customer_SupportRep": [("customer", "support_rep_id", "employee", "employee_id")],
     "Track_InvoiceLines": [("track", "track_id", "invoice_line", "track_id")],
+    # The inventory pack's own links. Present here so the traversal cases —
+    # a stock reached across a fan — get the same independent judge as the
+    # untraversed ones, rather than only hand-computed figures.
+    "Inventory_Track": [("daily_inventory", "track_id", "track", "track_id")],
+    "Track_Inventory": [("track", "track_id", "daily_inventory", "track_id")],
     "Track_Album": [("track", "album_id", "album", "album_id")],
     "Album_Tracks": [("album", "album_id", "track", "album_id")],
     "Artist_Albums": [("artist", "artist_id", "album", "artist_id")],
@@ -151,6 +156,29 @@ def walk(db, root_table, path_links):
     return tuples
 
 
+def distinct_grain_rows(tuples, grain, group_props):
+    """group key -> {row identity: grain row}, the dedupe the specification
+    calls for, split out so it can be asserted on its own.
+
+    It is asserted on its own because a WRONG key here does not fail — it
+    answers a smaller question. `PK[grain]` may be a tuple, and
+    `daily_inventory` is keyed (track_id, as_of_date): narrowed to `track_id`
+    this keeps one row per track, which still sums to the right number on data
+    where each track's physically-last row happens to be its boundary row. The
+    count of retained rows is the property that cannot pass by accident.
+    """
+    groups: dict[tuple, dict] = defaultdict(dict)
+    for tup in tuples:
+        if grain not in tup:
+            continue
+        key = tuple(tup[table][col] for (table, col) in group_props)
+        keyspec = PK[grain]
+        columns = keyspec if isinstance(keyspec, tuple) else (keyspec,)
+        row_id = tuple(tup[grain][c] for c in columns)
+        groups[key][row_id] = tup[grain]
+    return groups
+
+
 def answer(db, obj, links, group_props, metric_name, filters=None):
     """The specification, executed."""
     root_table = OBJECT_TABLE[obj]
@@ -166,16 +194,7 @@ def answer(db, obj, links, group_props, metric_name, filters=None):
         for (table, col, val) in filters:
             tuples = [t for t in tuples if table in t and t[table][col] == val]
 
-    # group key -> set of distinct grain rows (by pk)
-    groups: dict[tuple, dict] = defaultdict(dict)
-    for tup in tuples:
-        if grain not in tup:
-            continue
-        key = tuple(tup[table][col] for (table, col) in group_props)
-        keyspec = PK[grain]
-        columns = keyspec if isinstance(keyspec, tuple) else (keyspec,)
-        row_id = tuple(tup[grain][c] for c in columns)
-        groups[key][row_id] = tup[grain]
+    groups = distinct_grain_rows(tuples, grain, group_props)
 
     out = {}
     for key, rows in groups.items():

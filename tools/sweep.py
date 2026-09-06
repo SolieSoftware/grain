@@ -46,6 +46,10 @@ PATHS = [
     # oracle is the only independent judge of it, so the one comparison this
     # row makes is the one that matters.
     ("Inventory", []),
+    # The same stock across a fan. Unpinned it is refused by both engines;
+    # pinned by the fanning edge's unique key the subquery engine answers, and
+    # the oracle is what says the answer is right.
+    ("Inventory", ["Inventory_Track", "Track_InvoiceLines"]),
 ]
 
 # root object -> (spec group_by key, (oracle table, column))
@@ -64,7 +68,8 @@ GROUP_KEYS = {
     "Track": [("name", ("track", "name"))],
     "Invoice": [("billing_country", ("invoice", "billing_country"))],
     "Inventory": [("as_of", ("daily_inventory", "as_of_date")),
-                  ("track", ("daily_inventory", "track_id"))],
+                  ("track", ("daily_inventory", "track_id")),
+                  ("Track_InvoiceLines.id", ("invoice_line", "invoice_line_id"))],
 }
 
 

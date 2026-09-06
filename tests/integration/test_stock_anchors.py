@@ -16,7 +16,7 @@ from sqlalchemy import text
 
 from grain.domains.chinook_inventory import INVENTORY_DIR
 from grain.engine.api import Grain
-from grain.engine.spec import QuerySpec
+from grain.engine.spec import Hop, QuerySpec
 
 pytestmark = pytest.mark.integration
 
@@ -195,3 +195,120 @@ def test_the_oracle_agrees_with_the_engine(g, oracle_db, group_by, group_prop, m
     got = {tuple(r[:-1]): int(r[-1]) for r in rows}
     assert got == {k: int(v) for k, v in truth.items()}
     assert got, "an empty comparison would agree with anything"
+
+
+# -- a stock across a fan ----------------------------------------------------
+#
+# The pack declares Track and InvoiceLine of its own so these shapes exist at
+# all. Until it did, every query reaching `daily_inventory` was rooted on it
+# with no traversal, and the interaction most likely to be wrong -- a window
+# against a replicating join -- had no measured anchor.
+#
+# The result is that no wrong number can be constructed here, and the reason is
+# worth pinning rather than assuming: the guard fires on STRATEGY, not on
+# arithmetic. A fan beyond the metric's grain forces aggregate_then_join, which
+# a window cannot reach, so it is refused; and the only way to avoid that
+# strategy is to pin the fanning edge by a unique key, which leaves exactly one
+# grain row per group -- so the window and the replication never meet. Anyone
+# changing that guard should find out here.
+
+FAN = [Hop(link="Inventory_Track"), Hop(link="Track_InvoiceLines")]
+
+
+def test_a_stock_across_an_unpinned_fan_is_refused(g):
+    """`Track_InvoiceLines` fans beyond `daily_inventory`, forcing
+    aggregate-then-join, which pre-aggregates in a subquery built fresh from the
+    root and so cannot carry the window."""
+    from grain.engine.errors import GrainError
+
+    with pytest.raises(GrainError, match="aggregate-then-join") as exc:
+        g.query(QuerySpec(object="Inventory", traverse=FAN,
+                          metrics=["inventory_level"], limit=None))
+    assert any(a.startswith("group_by ") for a in exc.value.alternatives)
+
+
+def test_the_alternative_the_refusal_names_actually_resolves_it(g):
+    """Checked by USING the advice, not by matching its text — the distinction
+    that a recursive-traversal bug in this same guard turned on. Pinned by the
+    fanning edge's own unique key, each group holds one snapshot row, and each
+    windows to its own track's latest instant: 4, 7, 7, 100, 999 over five
+    invoice lines of tracks 1-4."""
+    from grain.engine.errors import GrainError
+
+    with pytest.raises(GrainError) as exc:
+        g.query(QuerySpec(object="Inventory", traverse=FAN,
+                          metrics=["inventory_level"], limit=None))
+    key = next(a for a in exc.value.alternatives if a.startswith("group_by ")).split("'")[1]
+    assert key == "Track_InvoiceLines.id"
+
+    rows = g.query(QuerySpec(object="Inventory", traverse=FAN, group_by=[key],
+                             metrics=["inventory_level"], limit=None)).rows
+    assert {int(r[0]): int(r[1]) for r in rows} == {579: 4, 1: 7, 1154: 7,
+                                                   1728: 100, 2: 999}
+
+
+def test_a_stock_reached_from_the_other_side_of_the_fan(g):
+    """Rooted on Track instead, the fan is Track -> Inventory, which lands ON
+    the metric's grain rather than beyond it — so no pin is needed and each
+    track windows to its own latest snapshot. Track 4, absent from the global
+    boundary, keeps its 999."""
+    rows = g.query(QuerySpec(object="Track", traverse=[Hop(link="Track_Inventory")],
+                             group_by=["name"], metrics=["inventory_level"],
+                             limit=None)).rows
+    assert sorted(int(r[1]) for r in rows) == [4, 7, 100, 999]
+    assert {r[0] for r in rows} == {
+        "For Those About To Rock (We Salute You)", "Balls to the Wall",
+        "Fast As a Shark", "Restless and Wild"}
+
+
+@pytest.mark.parametrize("root,links,group_prop,group_by", [
+    ("Inventory", ["Inventory_Track", "Track_InvoiceLines"],
+     ("invoice_line", "invoice_line_id"), ["Track_InvoiceLines.id"]),
+    ("Track", ["Track_Inventory"], ("track", "name"), ["name"]),
+])
+def test_the_oracle_agrees_across_a_fan(g, oracle_db, root, links, group_prop, group_by):
+    """The figures above are hand-computable, but hand-computing is the weaker
+    check and this repo has a scar from writing comparison SQL that fanned. The
+    oracle replicates the join in Python, dedupes grain rows on their COMPOSITE
+    key, then windows — so it sees the replication these shapes exist to test
+    and removes it independently of anything the engine does."""
+    from oracle import answer
+
+    rows = g.query(QuerySpec(object=root, traverse=[Hop(link=x) for x in links],
+                             group_by=group_by, metrics=["inventory_level"],
+                             limit=None)).rows
+    truth = answer(oracle_db, obj=root, links=links, group_props=[group_prop],
+                   metric_name="inventory_level")
+    assert {(r[0],): int(r[1]) for r in rows} == {k: int(v) for k, v in truth.items()}
+
+
+# -- the oracle's own dedup key ----------------------------------------------
+
+def test_the_oracle_dedupes_on_the_whole_composite_key(oracle_db):
+    """`daily_inventory` is keyed (track_id, as_of_date). Registering
+    `track_id` alone in the oracle's `PK` would not fail — it would keep one row
+    per track and answer a smaller question, and on data where each track's
+    physically-last row happens to be its boundary row it would still return
+    111 and look right.
+
+    So the assertion is on the count of RETAINED rows, which no arrangement of
+    the data can make accidentally correct: eight snapshots in, eight distinct
+    grain rows out. A narrowed key gives four, below."""
+    from oracle import distinct_grain_rows, walk
+
+    groups = distinct_grain_rows(walk(oracle_db, "daily_inventory", []),
+                                 "daily_inventory", [])
+    assert len(groups[()]) == 8
+
+
+def test_a_narrowed_key_would_silently_answer_a_smaller_question(oracle_db, monkeypatch):
+    """The negative half, and the reason the positive one is phrased as a
+    count: with the key narrowed the oracle still returns a number, still
+    returns it for every group, and raises nothing."""
+    import oracle
+
+    monkeypatch.setitem(oracle.PK, "daily_inventory", "track_id")
+    groups = oracle.distinct_grain_rows(oracle.walk(oracle_db, "daily_inventory", []),
+                                        "daily_inventory", [])
+    assert len(groups[()]) == 4
+    assert oracle.answer(oracle_db, "Inventory", [], [], "inventory_level")[()] is not None
