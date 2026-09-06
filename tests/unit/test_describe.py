@@ -145,3 +145,40 @@ def test_the_qualified_key_and_recursive_rules_are_published(chinook_lite):
     assert "max_depth" in rules["recursive_links"]
     assert "many_to_many" in rules["recursive_links"]
     assert "unique" in rules["recursive_links"]
+
+
+def test_the_stock_refusals_are_published(chinook_lite):
+    """`compile` raises three refusals that nothing else in `describe()`'s output
+    hints at. Every other refusal an agent meets is derivable from what it can
+    already see — a link's `cardinality`, a property's `unique` — so it can be
+    repaired by reading the ontology. These three follow from a metric being a
+    LEVEL and from the shape of the query around it, and an agent that has not
+    been told will propose a query, be refused, and have had no way to know
+    better. Each clause below corresponds to one raise site in
+    `engine/compile.py`; drop any of them and this fails."""
+    from grain.engine.describe import describe
+
+    rule = describe(chinook_lite)["rules"]["stock_metrics"]
+    assert "level" in rule.lower()
+    assert "REFUSED" in rule
+    # 1. two windowed stocks; 2. a stock beside any other metric;
+    # 3. a stock forced through aggregate_then_join by an unpinned fan.
+    assert "two such metrics in one query" in rule
+    assert "alongside any other metric" in rule
+    assert "fans out" in rule and "unique group_by key" in rule
+    # The symmetric engine refuses every stock, so the rule has to name the
+    # engine that can answer one -- an agent told only "refused" would retry.
+    assert "symmetric" in rule and "default engine" in rule
+
+
+def test_the_stock_rule_does_not_smuggle_in_a_per_metric_field(chinook_lite):
+    """The rule is stated ONCE, as prose about query shape (S1). It deliberately
+    does NOT publish `quantity` or `over_time` per metric: that a metric is a
+    level is carried by its own `description`/`ai_context`, and adding a metric
+    key has to be a deliberate change to the test that pins them, not a side
+    effect of documenting a refusal."""
+    from grain.engine.describe import describe
+
+    for metric in describe(chinook_lite)["metrics"].values():
+        assert "quantity" not in metric
+        assert "over_time" not in metric

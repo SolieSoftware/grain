@@ -104,6 +104,37 @@ RECURSIVE_LINK_RULE = (
     "one step, never the chain."
 )
 
+STOCK_METRIC_RULE = (
+    "Some metrics measure a LEVEL at an instant -- an inventory count, a "
+    "balance, a headcount -- rather than an amount accumulated over a period. "
+    "Such a metric is never summed across time: the engine restricts each group "
+    "to one instant (the earliest or latest, as the ontology declares) and "
+    "aggregates only those rows. Doing that wraps the whole statement in a "
+    "subquery, and three query shapes are therefore REFUSED rather than answered "
+    "another way: two such metrics in one query, one such metric alongside any "
+    "other metric, and one reached over a path that fans out beyond its grain "
+    "without a unique group_by key pinning that fan. Ask for a level metric on "
+    "its own, and put the other metrics in a second query. A metric's own "
+    "description says whether it is a level; the 'symmetric' engine refuses all "
+    "of them, so use the default engine."
+)
+"""Published because these three refusals are the only ones an agent cannot
+anticipate from anything else `describe()` shows it. Every other refusal follows
+from a cardinality or a `unique` flag that is right there in the output; these
+follow from a fact about the metric -- that it is a level -- and from the SHAPE
+of the query around it, so an agent proposes, is refused, and had no way to know
+better.
+
+Prose, and one rule, for the S1 reason above: the refusals are properties of the
+query's shape, not of a `(metric x dimension)` pair, so an agent that knows the
+shape rule can repair any of the three without being told in advance which
+metrics are levels. That a metric IS one is already carried by its own
+`description` and `ai_context` -- `inventory_level` says "Never summed across
+dates" -- which is where a semantic fact about one metric belongs. Publishing
+`quantity` as a metric key instead would be a deliberate change to
+`test_does_not_enumerate_metric_dimension_pairs`, and would still need this rule
+to say what follows from it."""
+
 GRAIN_MATCHING_RULE = (
     "A metric's grain must match the entity being measured -- the thing one row "
     "of the metric represents -- never the entity it is grouped by. 'Average "
@@ -190,6 +221,7 @@ def describe(onto: Ontology, object_name: str | None = None) -> dict[str, Any]:
             "dotted_filters": DOTTED_FILTER_RULE,
             "traversed_keys": TRAVERSED_KEY_RULE,
             "recursive_links": RECURSIVE_LINK_RULE,
+            "stock_metrics": STOCK_METRIC_RULE,
         },
         "objects": {name: _describe_object(onto, name) for name in names},
         "links": {
