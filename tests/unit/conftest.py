@@ -178,8 +178,8 @@ def lite_metadata():
     Table("track", md, Column("track_id", Integer, primary_key=True, nullable=False),
           Column("name", String, nullable=False), Column("album_id", Integer),
           # Present in the real chinook schema, and needed here so the quantity
-          # rule can be exercised against a rate (unit_price) and an extensive
-          # quantity (milliseconds) rather than an invented column.
+          # rule can be exercised against a value_per_unit (unit_price) and a
+          # flow (milliseconds) rather than an invented column.
           Column("unit_price", Numeric, nullable=False),
           Column("milliseconds", Integer, nullable=False))
     Table("playlist", md, Column("playlist_id", Integer, primary_key=True, nullable=False),

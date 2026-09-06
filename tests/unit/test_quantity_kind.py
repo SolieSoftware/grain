@@ -6,9 +6,9 @@ now had no concept of whether the QUANTITY was additive by nature.
 and answered no question. This closes that, at load, for both engines.
 
 The rule is narrow on purpose: it inspects a summed value only when that value
-is a BARE column reference. `sum(a * b)` is left alone, because a rate times a
-count genuinely is extensive — `revenue` is exactly that shape, and a cruder
-rule would refuse grain's flagship metric.
+is a BARE column reference. `sum(a * b)` is left alone, because a value_per_unit
+times a count genuinely is a flow — `revenue` is exactly that shape, and a
+cruder rule would refuse grain's flagship metric.
 """
 import pytest
 from pydantic import ValidationError
@@ -106,10 +106,11 @@ def test_summing_a_column_with_no_property_at_all_is_refused(lite_metadata):
 
 # -- the narrowness that keeps `revenue` legal -------------------------------
 
-def test_summing_a_product_of_a_rate_and_a_count_is_allowed(lite_metadata):
-    """`revenue` is `sum(unit_price * quantity)`. A rate times a count IS
-    extensive, so a rule that refused every sum touching a rate would refuse
-    grain's flagship metric. Only BARE column references are inspected."""
+def test_summing_a_product_of_a_value_per_unit_and_a_count_is_allowed(lite_metadata):
+    """`revenue` is `sum(unit_price * quantity)`. A value_per_unit times a
+    count IS a flow, so a rule that refused every sum touching a value_per_unit
+    would refuse grain's flagship metric. Only BARE column references are
+    inspected."""
     onto = _onto(_sum("track.unit_price * track.milliseconds"), quantity="value_per_unit")
     validate(onto, lite_metadata)
 
