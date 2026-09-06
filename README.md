@@ -3,7 +3,7 @@
 A declarative ontology layer over relational data — agents query objects, links and
 grain-aware metrics, never raw SQL.
 
-**Status: in development.** All 16 planned tasks are complete and **554 tests
+**Status: in development.** All 16 planned tasks are complete and **570 tests
 pass**. The **five critical defects** a whole-branch review found on 2026-08-18
 were fixed on 2026-08-24, each with a measured regression test at the facade —
 see *"Defects found and fixed"* below. **I3** (recursive traversal) is fixed too,
@@ -157,7 +157,7 @@ docs/plans/                  the plans and designs this was built from
 uv venv && uv pip install -e ".[dev,mcp]"
 cp .env.example .env          # then set GRAIN_DATABASE_URL — see below
 set -a && . ./.env && set +a
-uv run pytest -q              # 554 passing, 0 skipped
+uv run pytest -q              # 570 passing, 0 skipped
 uv run ruff check src tests   # clean
 ```
 
@@ -169,9 +169,9 @@ run can end report something other than success:
 
 | `GRAIN_DATABASE_URL` | `pytest -q` |
 |---|---|
-| unset | `384 passed, 170 skipped` |
-| `postgresql://user@localhost/chinook` | `4 failed, 385 passed, 165 errors` |
-| `postgresql+psycopg://user@localhost:5432/chinook` | `554 passed` |
+| unset | `391 passed, 179 skipped` |
+| `postgresql://user@localhost/chinook` | `4 failed, 392 passed, 174 errors` |
+| `postgresql+psycopg://user@localhost:5432/chinook` | `570 passed` |
 
 Only the third form runs the measured integration tests:
 
@@ -234,7 +234,7 @@ the naive sum across dates — the wrong answer — is 1153. Three tracks share 
 latest date, deliberately, because a window that picked one row per partition
 rather than every row tied at the boundary would pass a table with no ties.
 
-Without it 23 tests skip and everything else runs.
+Without it 31 tests skip and everything else runs.
 
 ## Defects found and fixed
 

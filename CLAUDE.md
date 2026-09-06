@@ -11,7 +11,7 @@ Read `README.md` first for what it does. This file is about how to work on it.
 
 ```bash
 export GRAIN_DATABASE_URL="postgresql+psycopg://$(whoami)@localhost:5432/chinook"
-uv run pytest -q          # 554 passing, 0 skipped
+uv run pytest -q          # 570 passing, 0 skipped
 uv run ruff check src tests tools
 ```
 
@@ -21,7 +21,7 @@ chinook has none, so `uv run python tools/seed_inventory.py` creates and seeds
 produce schema as a side effect of being loaded. Its declarations therefore
 cannot live in the chinook pack either (the loader refuses an ontology naming a
 missing table, so chinook would stop loading for anyone who had not seeded);
-they are in `src/grain/domains/chinook_inventory/`. Unseeded, 23 tests skip and
+they are in `src/grain/domains/chinook_inventory/`. Unseeded, 31 tests skip and
 the rest pass — a supported state, and also the state in which nothing
 independently checks stock. Seed it.
 
@@ -29,9 +29,9 @@ Three outcomes, two of them misleading:
 
 | `GRAIN_DATABASE_URL` | result |
 |---|---|
-| unset | `384 passed, 170 skipped` — **green, and never touched a database** |
-| `postgresql://…` | `4 failed, 385 passed, 165 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
-| `postgresql+psycopg://…` | **554 passed** — the only form that runs the measured tests |
+| unset | `391 passed, 179 skipped` — **green, and never touched a database** |
+| `postgresql://…` | `4 failed, 392 passed, 174 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
+| `postgresql+psycopg://…` | **570 passed** — the only form that runs the measured tests |
 
 The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
