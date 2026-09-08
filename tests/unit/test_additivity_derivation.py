@@ -26,6 +26,7 @@ from dataclasses import dataclass, fields
 
 import pytest
 
+from grain.engine.errors import MetricNotSymmetric
 from grain.engine.grain import (
     IRRELEVANT_TO_ADDITIVITY,
     _ADDITIVITY_INPUTS,
@@ -33,6 +34,7 @@ from grain.engine.grain import (
     _additivity,
     analyse,
 )
+from grain.engine.ontology import Metric
 from grain.engine.resolve import resolve
 from grain.engine.spec import Hop, QuerySpec
 from grain.engine_symmetric.grain import (
@@ -51,6 +53,7 @@ from grain.engine_symmetric.grain import (
     analyse as symmetric_analyse,
 )
 from grain.engine_symmetric.resolve import resolve as symmetric_resolve
+from grain.engine_symmetric.symmetric import require_eligible
 
 
 def _plan(onto, **kw):
@@ -312,6 +315,29 @@ def test_the_reads_check_catches_an_unclassified_attribute():
     assert unclassified == {"smuggled_claim"}
 
 
+def _parameter_aliases(func):
+    """Names bound directly to `func`'s first parameter — the alias escape.
+
+    `p = plan` is invisible to `_attributes_read_off_the_argument`: the binding
+    is `Name`-to-`Name`, so nothing is recorded, and every later `p.field` is
+    read off a name that is not the parameter's. It is also the escape a
+    REFACTOR would plausibly introduce, because an alias is what someone writes
+    when a line gets long — which makes it worth checking mechanically rather
+    than listing in a docstring.
+    """
+    fn = ast.parse(textwrap.dedent(inspect.getsource(func))).body[0]
+    param = fn.args.args[0].arg
+    return sorted(
+        target.id
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == param
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    )
+
+
 def test_the_measured_escape_forms_are_the_ones_recorded():
     """The escape forms in `_attributes_read_off_the_argument`'s docstring, as a
     test rather than a paragraph.
@@ -341,10 +367,22 @@ def test_the_measured_escape_forms_are_the_ones_recorded():
     # positive, which is the direction that cannot hide an unclassified read.
     assert _attributes_read_off_the_argument(_aliased_loop_variable) == {"grouped"}
 
-    # And neither real derivation uses the two that escape.
+    # The alias checker's own failure path, before it is trusted below.
+    assert _parameter_aliases(_alias) == ["p"]
+    assert _parameter_aliases(_comprehension) == []
+
+    # And neither real derivation uses either of the two that escape. BOTH are
+    # checked, not just `getattr`: an assertion covering one escape form reads
+    # as though it covered the class, and the alias is the likelier of the two
+    # to arrive by refactor.
     for func in (_additivity, _symmetric_additivity):
         src = textwrap.dedent(inspect.getsource(func))
         assert "getattr(" not in src, f"{func.__module__} uses an invisible read"
+        aliases = _parameter_aliases(func)
+        assert not aliases, (
+            f"{func.__module__} binds its plan parameter to {aliases}; reads off "
+            f"that name are invisible to the census check above"
+        )
 
 
 def test_every_irrelevance_carries_a_reason():
@@ -505,7 +543,7 @@ def test_the_symmetric_derivation_reads_only_classified_fields():
     )
 
 
-def test_the_symmetric_derivation_states_its_missing_condition():
+def test_the_symmetric_derivation_states_its_missing_condition(lite_metadata):
     """A missing condition looks identical to an unconsidered one.
 
     The subquery engine has a third condition for a windowed level; this engine
@@ -513,11 +551,28 @@ def test_the_symmetric_derivation_states_its_missing_condition():
     is built. That absence must be SAID, not inferred by whoever next diffs the
     two functions — the resemblance between 'considered and inapplicable' and
     'never thought about' is the whole failure this derivation removes.
+
+    THE CLAIM AND THE FACT FAIL TOGETHER, which is why the refusal is run here
+    rather than left to the stock tests that also cover it. Asserting only the
+    docstring's words leaves the premise pinned somewhere else, by tests anyone
+    ADDING stock support would edit — after which this docstring is false and
+    its own test is still green. That is the same defect as asserting an error's
+    message instead of running its named alternative, which has landed in this
+    project four times. So the sentence and the behaviour it describes are one
+    assertion: give this engine a stock and it must still refuse.
     """
     doc = _symmetric_additivity.__doc__
     assert doc is not None
     assert "MetricNotSymmetric" in doc
     assert "no window condition" in doc
+
+    # Built the way `tests/unit/test_stock.py::_stock` builds one, so the shape
+    # under test is the same stock the rest of the suite uses.
+    stock = Metric(name="level", grain="invoice", type="decimal", agg="sum",
+                   value="invoice.total", quantity="stock",
+                   over_time={"dimension": "when", "choice": "last"})
+    with pytest.raises(MetricNotSymmetric):
+        require_eligible(stock, lite_metadata)
 
 
 def test_the_two_derivations_are_not_the_same_object():
