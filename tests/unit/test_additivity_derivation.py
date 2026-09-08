@@ -11,6 +11,13 @@ decision and the claim describing it parting company. So each fact's fields
 are checked against the live `non_additive_reason` string: if the fact says
 `Playlist_Tracks`, the reason must say so too, because that is precisely the
 agreement the later derivation task will depend on.
+
+BOTH ENGINES, one file. The two derivations are DELIBERATE COPIES of each other
+— `engine_symmetric/resolve.py` is already an intentional duplicate for the
+reason that applies here too: a shared implementation makes the differential
+harness blind, because both engines inherit one bug and agree. The checks over
+them are shared even though the derivations are not, which is what makes the
+duplication's drift visible. See the section header lower down for what differs.
 """
 import ast
 import inspect
@@ -28,6 +35,22 @@ from grain.engine.grain import (
 )
 from grain.engine.resolve import resolve
 from grain.engine.spec import Hop, QuerySpec
+from grain.engine_symmetric.grain import (
+    IRRELEVANT_TO_ADDITIVITY as SYMMETRIC_IRRELEVANT,
+)
+from grain.engine_symmetric.grain import (
+    _ADDITIVITY_INPUTS as SYMMETRIC_ADDITIVITY_INPUTS,
+)
+from grain.engine_symmetric.grain import (
+    MetricPlan as SymmetricMetricPlan,
+)
+from grain.engine_symmetric.grain import (
+    _additivity as _symmetric_additivity,
+)
+from grain.engine_symmetric.grain import (
+    analyse as symmetric_analyse,
+)
+from grain.engine_symmetric.resolve import resolve as symmetric_resolve
 
 
 def _plan(onto, **kw):
@@ -199,6 +222,37 @@ def _attributes_read_off_the_argument(func):
     scope by design. `overlap_link` is recorded at the binding; the fact's own
     members are its internals, and `OverlapFact` is frozen and derived from a
     decision already made.
+
+    KNOWN ESCAPE FORMS, measured rather than reasoned about, and pinned by
+    `test_the_measured_escape_forms_are_the_ones_recorded`. This walk sees an
+    `ast.Attribute` whose value is the parameter NAME, so a read reaching the
+    plan any other way is invisible to it:
+
+    - `p = plan` then `p.forced_by` — ESCAPES. The binding is `Name`-to-`Name`,
+      which records nothing, and `p` is not the parameter's name. Distinct from
+      the `o = plan.overlap_link` case above, which is deliberate: there the
+      field IS recorded, at the binding.
+    - `getattr(plan, "forced_by")` — ESCAPES. It is a `Call`, not an
+      `ast.Attribute`, so there is no `attr` to collect.
+    - a plain comprehension, `any(plan.grouped for _ in ...)` — does NOT escape.
+      `ast.walk` descends into comprehension bodies and the parameter name is
+      still in scope there.
+    - a comprehension whose loop variable ALIASES the parameter,
+      `[plan.grouped for plan in others]` — ESCAPES the intent while still
+      being recorded: the name matches, so `grouped` is collected off an object
+      that is not the plan. A false positive rather than a false negative, and
+      so the harmless direction.
+
+    `_additivity` uses none of these, in either engine. Stated because a known
+    gap stated is a gap; a known gap unstated is the exact failure mode — a
+    claim and the code under it parting company — that this whole file exists to
+    close. Closing them would mean a real scope analysis; the cheap defence is
+    that both derivations are short enough to read.
+
+    ALSO COUPLED TO A SINGLE PARAMETER. `fn.args.args[0]` is the only name
+    matched, so a derivation taking its facts as separate arguments would have
+    reads off the second and later ones go unseen entirely. Both engines'
+    `_additivity` therefore take one parameter, deliberately.
     """
     fn = ast.parse(textwrap.dedent(inspect.getsource(func))).body[0]
     param = fn.args.args[0].arg
@@ -258,6 +312,41 @@ def test_the_reads_check_catches_an_unclassified_attribute():
     assert unclassified == {"smuggled_claim"}
 
 
+def test_the_measured_escape_forms_are_the_ones_recorded():
+    """The escape forms in `_attributes_read_off_the_argument`'s docstring, as a
+    test rather than a paragraph.
+
+    A documented gap that nothing checks decays into a documented gap that is no
+    longer the real one — which is the same species of defect as a stored
+    verdict disagreeing with its decisions. So each claim is run.
+    """
+    def _alias(plan):
+        p = plan
+        return p.forced_by
+
+    def _getattr_form(plan):
+        return getattr(plan, "forced_by")  # noqa: B009
+
+    def _comprehension(plan):
+        return any(plan.grouped for _ in range(1))
+
+    def _aliased_loop_variable(plan):
+        others = [plan]
+        return [plan.grouped for plan in others]
+
+    assert _attributes_read_off_the_argument(_alias) == set()
+    assert _attributes_read_off_the_argument(_getattr_form) == set()
+    assert _attributes_read_off_the_argument(_comprehension) == {"grouped"}
+    # Recorded, but off the loop variable rather than the parameter: a false
+    # positive, which is the direction that cannot hide an unclassified read.
+    assert _attributes_read_off_the_argument(_aliased_loop_variable) == {"grouped"}
+
+    # And neither real derivation uses the two that escape.
+    for func in (_additivity, _symmetric_additivity):
+        src = textwrap.dedent(inspect.getsource(func))
+        assert "getattr(" not in src, f"{func.__module__} uses an invisible read"
+
+
 def test_every_irrelevance_carries_a_reason():
     """The reason string IS the deliverable — it records the judgement that was
     missing when `window` was added. An empty or one-word entry passes the
@@ -265,7 +354,182 @@ def test_every_irrelevance_carries_a_reason():
 
     A TRIPWIRE, NOT A GUARANTEE. No mechanical test can tell a real judgement
     from five plausible words; this one stops a blank or a shrug, and the
-    reading is still yours. Task 3 copies this file's shape into the symmetric
-    engine — the next reader should know which of the two this is."""
-    for name, reason in IRRELEVANT_TO_ADDITIVITY.items():
-        assert len(reason.split()) >= 5, f"{name}: reason too thin to be a judgement"
+    reading is still yours. Both engines' tables are checked, and the next
+    reader should know which of the two this is."""
+    for table in (IRRELEVANT_TO_ADDITIVITY, SYMMETRIC_IRRELEVANT):
+        for name, reason in table.items():
+            assert len(reason.split()) >= 5, f"{name}: reason too thin to be a judgement"
+
+
+# ---------------------------------------------------------------------------
+# The symmetric engine, whose derivation is a DELIBERATE COPY.
+#
+# `engine_symmetric/resolve.py` is already an intentional duplicate of
+# `engine/resolve.py`, and for the reason that applies here too: a shared
+# implementation would make the differential harness blind, because both engines
+# would inherit one bug and AGREE. So `_additivity` is duplicated and the checks
+# over it are not — this file runs the same census, the same reads check and the
+# same irrelevance floor against both, which is what makes the duplication's
+# drift visible, the way `test_resolver_parity.py` does for the resolver.
+#
+# What differs, and must keep differing:
+#   - TWO conditions, not three.
+#   - The second is NOT the subquery engine's `separated`. It follows the path
+#     to the GROUP KEY, which `engine/grain.py` records as a capability the
+#     subquery engine lacks — there, a root-measured metric has an empty prefix
+#     and only a `KeyBeyondGrain` refusal keeps the verdict from being wrong by
+#     accident.
+#   - No window condition, because this engine refuses a stock outright.
+# ---------------------------------------------------------------------------
+
+
+def _sym_plan(onto, metadata, **kw):
+    rq = symmetric_resolve(QuerySpec(**kw), onto)
+    return symmetric_analyse(rq, metadata).metric_plans[0]
+
+
+def test_the_symmetric_prefix_overlap_fact_agrees_with_its_reason(
+    chinook_lite, lite_metadata
+):
+    """Condition 1, the same shape as the subquery engine's — but the reason
+    names the ENCODING rather than the identifying keys, because this engine has
+    no `NonAdditiveRefused` to have validated any."""
+    mp = _sym_plan(
+        chinook_lite,
+        lite_metadata,
+        object="Playlist",
+        traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")],
+        metrics=["revenue"],
+        group_by=["id"],
+    )
+    assert mp.additive is False
+    fact = mp.prefix_overlap
+    assert fact is not None
+    assert mp.group_key_overlap is None
+    assert fact.link_name == "Playlist_Tracks"
+    assert fact.cardinality == "many_to_many"
+    assert fact.grain == "invoice_line"
+
+    reason = mp.non_additive_reason
+    assert fact.link_name in reason
+    assert fact.cardinality in reason
+    assert fact.grain in reason
+    assert "the encoding counts every" in reason
+
+
+def test_the_symmetric_group_key_fact_agrees_with_its_reason(
+    chinook_lite, lite_metadata
+):
+    """Condition 2, and the one the subquery engine cannot express.
+
+    `distinct_employees` is measured at the ROOT's grain, so its prefix is empty
+    and condition 1 can never fire — yet every employee sits under every
+    ancestor above them, so the column cannot sum to the total. The subquery
+    engine refuses this query with `KeyBeyondGrain`
+    (`test_immunity_does_not_lift_the_key_beyond_grain_refusal`), which is what
+    accidentally keeps it from reporting `additive: true`. Here the path is
+    followed to the GROUP KEY and the verdict is reached on purpose.
+    """
+    mp = _sym_plan(
+        chinook_lite,
+        lite_metadata,
+        object="Employee",
+        traverse=[Hop(link="Employee_Manager")],
+        metrics=["distinct_employees"],
+        group_by=["Employee_Manager.last_name"],
+    )
+    assert mp.additive is False
+    assert mp.prefix_overlap is None
+    fact = mp.group_key_overlap
+    assert fact is not None
+    assert fact.key_name == "Employee_Manager.last_name"
+    assert fact.link_name == "Employee_Manager"
+    # `effective_cardinality`, not the declared many_to_one: the closure of a
+    # recursive link is many_to_many, and that is what makes groups overlap.
+    assert fact.cardinality == "many_to_many"
+    assert fact.grain == "employee"
+
+    reason = mp.non_additive_reason
+    assert fact.key_name in reason
+    assert fact.link_name in reason
+    assert fact.cardinality in reason
+    assert fact.grain in reason
+
+
+def test_the_symmetric_prefix_condition_wins_when_both_hold(
+    chinook_lite, lite_metadata
+):
+    """Precedence, preserved from the `if additive and overlap is not None`
+    guard the derivation replaced. Both facts hold here — the prefix crosses a
+    many_to_many AND the group key sits beyond it — and only the prefix one is
+    recorded, so the plan cannot claim a reason the caller never reads."""
+    mp = _sym_plan(
+        chinook_lite,
+        lite_metadata,
+        object="Playlist",
+        traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")],
+        metrics=["revenue"],
+        group_by=["Playlist_Tracks.name"],
+    )
+    assert mp.additive is False
+    assert mp.prefix_overlap is not None
+    assert mp.group_key_overlap is None
+    assert "Playlist_Tracks" in mp.non_additive_reason
+
+
+def test_an_additive_symmetric_verdict_has_neither_fact(chinook_lite, lite_metadata):
+    mp = _sym_plan(chinook_lite, lite_metadata, object="InvoiceLine", metrics=["revenue"])
+    assert mp.additive is True
+    assert mp.prefix_overlap is None
+    assert mp.group_key_overlap is None
+
+
+def test_every_symmetric_metric_plan_field_is_classified():
+    """The same census, over the other engine's own plan type."""
+    _assert_census_complete(
+        SymmetricMetricPlan, SYMMETRIC_ADDITIVITY_INPUTS, SYMMETRIC_IRRELEVANT
+    )
+
+
+def test_the_symmetric_derivation_reads_only_classified_fields():
+    """The same reads check, over the other engine's own derivation. The
+    classification is checked against the code rather than maintained beside
+    it — see `test_the_derivation_reads_only_classified_fields`."""
+    read = _attributes_read_off_the_argument(_symmetric_additivity)
+    unclassified = read - SYMMETRIC_ADDITIVITY_INPUTS
+    assert not unclassified, (
+        f"the symmetric _additivity reads plan attributes that are not "
+        f"additivity inputs: {sorted(unclassified)}. Either the derivation "
+        f"should not be reading them, or they belong in _ADDITIVITY_INPUTS (and "
+        f"out of IRRELEVANT_TO_ADDITIVITY, whose entry is then a false claim)."
+    )
+
+
+def test_the_symmetric_derivation_states_its_missing_condition():
+    """A missing condition looks identical to an unconsidered one.
+
+    The subquery engine has a third condition for a windowed level; this engine
+    has none, because it refuses a stock with `MetricNotSymmetric` before a plan
+    is built. That absence must be SAID, not inferred by whoever next diffs the
+    two functions — the resemblance between 'considered and inapplicable' and
+    'never thought about' is the whole failure this derivation removes.
+    """
+    doc = _symmetric_additivity.__doc__
+    assert doc is not None
+    assert "MetricNotSymmetric" in doc
+    assert "no window condition" in doc
+
+
+def test_the_two_derivations_are_not_the_same_object():
+    """The duplication, pinned. Deduplicating these would make the differential
+    harness blind to a bug in the derivation, because both engines would inherit
+    it and agree — the same reason `engine_symmetric/resolve.py` is a copy, and
+    the same reason the defect this plan closes escaped.
+
+    So the drift is made visible instead: every check above runs over both.
+    """
+    assert _additivity is not _symmetric_additivity
+    assert _additivity.__module__ != _symmetric_additivity.__module__
+    # And the difference that must survive: two conditions here, three there.
+    assert "window" in _ADDITIVITY_INPUTS
+    assert "window" not in SYMMETRIC_ADDITIVITY_INPUTS
