@@ -52,8 +52,6 @@ class MetricPlan:
     metric: Metric
     strategy: Strategy
     forced_by: str | None = None
-    additive: bool = True
-    non_additive_reason: str | None = None
     # How many edges of the path a pre-aggregating subquery must apply: enough to
     # reach the metric's grain, and enough to carry every qualified group key it
     # has to rejoin on. Decided here, with the rest of the verdicts, rather than
@@ -72,6 +70,117 @@ class MetricPlan:
     overlap_link: OverlapFact | None = None
     separated_fan: SeparatedFan | None = None
     grouped: bool = False
+
+    # Derived, not stored. A stored verdict can disagree with the decisions it
+    # describes, and three Criticals are exactly that disagreement — most
+    # recently a windowed level reported summable because the field was set by
+    # a branch that never met `window`. A property cannot be set at all.
+    @property
+    def additive(self) -> bool:
+        return _additivity(self)[0]
+
+    @property
+    def non_additive_reason(self) -> str | None:
+        return _additivity(self)[1]
+
+
+# The fields the additivity verdict is derived from. Adding a field that can
+# affect whether a column sums to the total means adding it here AND handling
+# it in `_additivity`; the census test refuses an unclassified field.
+_ADDITIVITY_INPUTS = frozenset({"overlap_link", "separated_fan", "grouped", "window"})
+
+# Fields that provably cannot change the verdict, each with the reason. The
+# reason is the record of the judgement — see the census test.
+IRRELEVANT_TO_ADDITIVITY: dict[str, str] = {
+    "metric": (
+        "identifies which metric this is; its own quantity reaches the verdict "
+        "through window"
+    ),
+    "strategy": (
+        "chooses the SQL shape, and both shapes are correct per group; overlap "
+        "is a property of the path"
+    ),
+    "forced_by": (
+        "names the link that forced a rewrite, which is a strategy fact and not "
+        "a summability one"
+    ),
+    "subquery_edges": (
+        "how far a pre-aggregating subquery walks, which changes emitted SQL "
+        "and not whether groups overlap"
+    ),
+}
+
+
+def _additivity(plan: MetricPlan) -> tuple[bool, str | None]:
+    """The verdict, derived from the finished plan.
+
+    NEVER RAISES. Refusing is a decision and belongs in `analyse`; a derivation
+    that can raise is a second decision point wearing a property's clothes.
+    `plan.overlap_link` already carries the identifying keys that
+    `_require_identifying_keys` validated when it chose not to refuse.
+
+    Conditions are independent and both reasons are kept when both hold:
+    dropping half of why a total is meaningless is not an improvement on
+    saying both."""
+    reasons: list[str] = []
+
+    if plan.overlap_link is not None:
+        o = plan.overlap_link
+        reasons.append(
+            f"'{plan.metric.name}' is grouped across '{o.link_name}', which is "
+            f"{o.cardinality}. Each group is correct — "
+            f"'{o.identifying_keys}' identifies one {o.subject} — but the groups "
+            f"overlap, so this column will not sum to the total."
+        )
+    elif plan.separated_fan is not None:
+        s = plan.separated_fan
+        reasons.append(
+            f"'{plan.metric.name}' is counted once per {s.to_object_name} reached "
+            f"through '{s.link_name}', which is "
+            f"{s.cardinality}. Each group is correct — "
+            f"'{s.pin_name}' identifies one {s.to_object_name} — but one "
+            f"'{s.grain}' row belongs to several groups, so this column "
+            f"will not sum to the total."
+        )
+
+    # A LEVEL is whole only at one instant, and `_window_to_boundary`
+    # partitions by the query's OWN group keys -- so each group collapses to
+    # its own boundary instant. Every group is right; the total is a level at
+    # no instant. Grouped by track: 4+7+100+999 = 1110, against an ungrouped
+    # answer of 111. Grouped by the time dimension itself the total is 1153,
+    # which is exactly the naive across-time sum
+    # `test_the_naive_sum_differs_from_the_level` pins as the wrong answer.
+    #
+    # The overlap conditions above cannot see this, because they ask a
+    # different question: do the GROUPS overlap? A stock's do not, so on their
+    # own they answer True and would license that total -- `agent/tools.py`
+    # emits its "do NOT add them together" caveat only when `additive` is
+    # False, and the prompt tells the model to total otherwise.
+    #
+    # Recorded because NEITHER standing safety net could see it, and the next
+    # person will assume one of them did. The differential harness cannot:
+    # the rule is a claim made in the plan layer, and the symmetric engine
+    # refuses a stock outright, so there is no second engine to disagree.
+    # `tools/oracle.py` cannot either: it answers the same per-group question
+    # and AGREES per group. It is the total that is wrong, and no per-group
+    # cross-check has an opinion about a total nobody computed. What DOES see
+    # it is this condition sitting in the same function as the others, plus the
+    # census test that refuses a plan field no condition here has considered.
+    #
+    # Ungrouped stays additive: one global boundary instant, one figure, and
+    # nothing to add it to.
+    if plan.window is not None and plan.grouped:
+        reasons.append(
+            f"'{plan.metric.name}' is a level at an instant, windowed to each "
+            f"group's own boundary. Each group is correct — but adding them "
+            f"sums across instants and gives a level at no instant, and "
+            f"grouping by the time dimension itself makes the total the "
+            f"across-time sum a level is defined not to have."
+        )
+
+    if not reasons:
+        return True, None
+    return False, " ".join(reasons)
 
 
 @dataclass
@@ -367,8 +476,6 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
         # is a property of THIS metric's own prefix, not of the query as a
         # whole — a different metric's grain can sit on an entirely different,
         # all-one-to-many prefix and remain perfectly additive.
-        additive = True
-        non_additive_reason: str | None = None
         overlap_fact: OverlapFact | None = None
         separated_fact: SeparatedFan | None = None
         for edge in prefix:
@@ -379,7 +486,6 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
             # the ancestor groups overlap in exactly the way this branch exists
             # to catch. `Hop(max_depth=1)` is one hop and stays non-additive-free.
             if edge.link.effective_cardinality == "many_to_many":
-                additive = False
                 # Surfacing this instead of refusing it is only defensible while
                 # the per-group numbers ARE correct, and that holds only when one
                 # group is one row of the object being grouped. Where it does
@@ -394,15 +500,13 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
                     identifying_keys=keys,
                     subject=subject,
                 )
-                non_additive_reason = (
-                    f"'{metric.name}' is grouped across '{edge.link.name}', which is "
-                    f"{edge.link.effective_cardinality}. Each group is correct — "
-                    f"'{keys}' identifies one {subject} — but the groups overlap, so "
-                    f"this column will not sum to the total."
-                )
                 break
 
-        if additive and separated:
+        # `overlap_fact is None`, not the old `additive` flag: the precedence is
+        # preserved by the `elif` in `_additivity`, and reading the fact rather
+        # than a verdict is the whole point — a decision cannot disagree with
+        # itself.
+        if overlap_fact is None and separated:
             # Inline was only correct because a unique key scattered this
             # metric's replicated rows into distinct groups. That makes every
             # group right and the TOTAL meaningless: one row is counted in every
@@ -410,21 +514,12 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
             # reason this verdict is allowed to be inline.
             index, edge = separated[0]
             pin = _pinned_by_a_unique_key(rq, index)
-            additive = False
             separated_fact = SeparatedFan(
                 link_name=edge.link.name,
                 cardinality=edge.link.effective_cardinality,
                 to_object_name=edge.to_object.name,
                 pin_name=pin.name,
                 grain=metric.grain,
-            )
-            non_additive_reason = (
-                f"'{metric.name}' is counted once per {edge.to_object.name} reached "
-                f"through '{edge.link.name}', which is "
-                f"{edge.link.effective_cardinality}. Each group is correct — "
-                f"'{pin.name}' identifies one {edge.to_object.name} — but one "
-                f"'{metric.grain}' row belongs to several groups, so this column "
-                f"will not sum to the total."
             )
 
         window = None
@@ -433,56 +528,16 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
             prop = obj.properties[metric.over_time.dimension]
             window = WindowSpec(column=prop.column, choice=metric.over_time.choice)
 
-        # A LEVEL is whole only at one instant, and `_window_to_boundary`
-        # partitions by the query's OWN group keys -- so each group collapses to
-        # its own boundary instant. Every group is right; the total is a level at
-        # no instant. Grouped by track: 4+7+100+999 = 1110, against an ungrouped
-        # answer of 111. Grouped by the time dimension itself the total is 1153,
-        # which is exactly the naive across-time sum
-        # `test_the_naive_sum_differs_from_the_level` pins as the wrong answer.
-        #
-        # The verdict above cannot see this, because it asks a different
-        # question: do the GROUPS overlap? A stock's do not, so it answers True
-        # and would license that total -- `agent/tools.py` emits its "do NOT add
-        # them together" caveat only when `additive` is False, and the prompt
-        # tells the model to total otherwise.
-        #
-        # Recorded because NEITHER standing safety net could see it, and the next
-        # person will assume one of them did. The differential harness cannot:
-        # the rule is a claim made in the plan layer, and the symmetric engine
-        # refuses a stock outright, so there is no second engine to disagree.
-        # `tools/oracle.py` cannot either: it answers the same per-group question
-        # and AGREES per group. It is the total that is wrong, and no per-group
-        # cross-check has an opinion about a total nobody computed.
-        #
-        # Ungrouped stays additive: one global boundary instant, one figure, and
-        # nothing to add it to.
-        if window is not None and rq.group_by:
-            additive = False
-            level_reason = (
-                f"'{metric.name}' is a level at an instant, windowed to each "
-                f"group's own boundary. Each group is correct — but adding them "
-                f"sums across instants and gives a level at no instant, and "
-                f"grouping by the time dimension itself makes the total the "
-                f"across-time sum a level is defined not to have."
-            )
-            # An earlier reason is still true (a pinned fan downstream of a stock
-            # reaches here), so it is kept rather than overwritten: the caller
-            # gets one string, and dropping half of why the total is meaningless
-            # is not an improvement on saying both.
-            non_additive_reason = (
-                f"{non_additive_reason} {level_reason}"
-                if non_additive_reason
-                else level_reason
-            )
+        # The level's own consequence for additivity is NOT decided here. It is
+        # derived in `_additivity` from `window` and `grouped`, because it was
+        # the accumulation in this loop that lost it: the branch that set
+        # `additive` never met `window`, and nothing made them meet.
 
         plan.metric_plans.append(
             MetricPlan(
                 metric=metric,
                 strategy=strategy,
                 forced_by=forced_by,
-                additive=additive,
-                non_additive_reason=non_additive_reason,
                 subquery_edges=subquery_edges,
                 window=window,
                 overlap_link=overlap_fact,
