@@ -41,12 +41,116 @@ Strategy = Literal["inline", "symmetric"]
 
 
 @dataclass(frozen=True)
+class PrefixOverlap:
+    """A many_to_many edge on the metric's own prefix."""
+
+    link_name: str
+    cardinality: str
+    grain: str
+
+
+@dataclass(frozen=True)
+class GroupKeyOverlap:
+    """A group key reached through a fanning link. Read from `_overlap`, which
+    follows the path to the KEY rather than to the grain — a capability the
+    subquery engine does not have."""
+
+    key_name: str
+    link_name: str
+    cardinality: str
+    grain: str
+
+
+@dataclass(frozen=True)
 class MetricPlan:
     metric: Metric
     strategy: Strategy
     forced_by: str | None = None
-    additive: bool = True
-    non_additive_reason: str | None = None
+    # The facts the additivity verdict rests on. Stored so the verdict is a
+    # function of the finished plan rather than a variable accumulated beside
+    # it — see docs/plans/2026-09-06-derived-additivity-design.md. A deliberate
+    # copy of the subquery engine's shape, not shared code: `resolve.py` here is
+    # already an intentional duplicate, because a shared implementation makes
+    # the differential harness blind — both engines inherit one bug and agree.
+    prefix_overlap: PrefixOverlap | None = None
+    group_key_overlap: GroupKeyOverlap | None = None
+
+    # Derived, not stored. A stored verdict can disagree with the decisions it
+    # describes, and three Criticals in this project are exactly that
+    # disagreement. A property cannot be set at all.
+    @property
+    def additive(self) -> bool:
+        return _additivity(self)[0]
+
+    @property
+    def non_additive_reason(self) -> str | None:
+        return _additivity(self)[1]
+
+
+# The fields the verdict is derived from. Adding a field that can affect whether
+# a column sums to the total means adding it here AND handling it in
+# `_additivity`; the census test refuses an unclassified field, and the AST check
+# refuses a read this set does not list.
+#
+# `metric` is an input because `_additivity` dereferences it — it supplies the
+# LABEL every reason string names, and nothing else about the metric reaches the
+# boolean. Listing it as irrelevant would be a false claim the AST check catches.
+_ADDITIVITY_INPUTS = frozenset({"prefix_overlap", "group_key_overlap", "metric"})
+
+# Fields that provably cannot change the verdict, each with the reason. The
+# reason is the record of the judgement — see the census test.
+IRRELEVANT_TO_ADDITIVITY: dict[str, str] = {
+    "strategy": (
+        "inline versus symmetric changes the encoding, and both count every "
+        "grain row once per group"
+    ),
+    "forced_by": (
+        "names the link that forced the encoding, which is a strategy fact and "
+        "not a summability one"
+    ),
+}
+
+
+def _additivity(plan: MetricPlan) -> tuple[bool, str | None]:
+    """This engine's verdict, derived from the finished plan. Never raises.
+
+    NEVER RAISES for the same reason the subquery engine's does not: refusing is
+    a decision and belongs in `analyse`. Here nothing even tempts it — neither
+    condition calls a validator, because this engine has no `NonAdditiveRefused`
+    (see the module docstring, difference 3).
+
+    TWO conditions, not the subquery engine's three, and the second is NOT its
+    `separated`: `_overlap` follows the path to the GROUP KEY rather than to the
+    grain, which `engine/grain.py` records as a capability the subquery engine
+    lacks. That difference is deliberate — do not bring it to parity.
+
+    There is deliberately no window condition: this engine refuses a stock with
+    `MetricNotSymmetric`, so a level never reaches a plan here. Stated rather
+    than omitted — a missing condition looks identical to an unconsidered one,
+    and that resemblance is what this derivation exists to remove.
+
+    Precedence, not accumulation: the prefix condition returns first, matching
+    the `if additive and overlap is not None` guard this replaced.
+    """
+    if plan.prefix_overlap is not None:
+        o = plan.prefix_overlap
+        return False, (
+            f"'{plan.metric.name}' is grouped across '{o.link_name}', which "
+            f"is {o.cardinality}. Each group is correct "
+            f"— the encoding counts every '{o.grain}' row once per "
+            f"group — but one row belongs to several groups, so this "
+            f"column will not sum to the total."
+        )
+    if plan.group_key_overlap is not None:
+        g = plan.group_key_overlap
+        return False, (
+            f"'{plan.metric.name}' is grouped by '{g.key_name}', which is reached "
+            f"through '{g.link_name}' ({g.cardinality}). "
+            f"Each group is correct, but one '{g.grain}' row belongs to "
+            f"every group it can reach, so this column will not sum to the "
+            f"total."
+        )
+    return True, None
 
 
 @dataclass
@@ -175,8 +279,10 @@ def analyse(rq: ResolvedQuery, metadata: MetaData) -> GrainPlan:
         # metric's rows double-count inside a group" — the encoding settles that
         # — but "does one grain row belong to more than one group". Two ways it
         # can, and they are independent.
-        additive = True
-        non_additive_reason: str | None = None
+        # The FACTS, not the verdict. `_additivity` derives the verdict from
+        # them, so a condition here cannot disagree with the claim describing it.
+        prefix_overlap: PrefixOverlap | None = None
+        group_key_overlap: GroupKeyOverlap | None = None
 
         for edge in prefix:
             # `effective_cardinality`, not `cardinality`: a recursive link
@@ -184,25 +290,26 @@ def analyse(rq: ResolvedQuery, metadata: MetaData) -> GrainPlan:
             # where each row has many ancestors and each ancestor many
             # descendants. `max_depth=1` is one hop and stays additive.
             if edge.link.effective_cardinality == "many_to_many":
-                additive = False
-                non_additive_reason = (
-                    f"'{metric.name}' is grouped across '{edge.link.name}', which "
-                    f"is {edge.link.effective_cardinality}. Each group is correct "
-                    f"— the encoding counts every '{metric.grain}' row once per "
-                    f"group — but one row belongs to several groups, so this "
-                    f"column will not sum to the total."
+                prefix_overlap = PrefixOverlap(
+                    link_name=edge.link.name,
+                    cardinality=edge.link.effective_cardinality,
+                    grain=metric.grain,
                 )
                 break
 
-        if additive and overlap is not None:
+        # `prefix_overlap is None`, not the old `additive` flag: the precedence
+        # is preserved by the early return in `_additivity`, and reading the fact
+        # rather than a verdict is the point — a decision cannot disagree with
+        # itself. Recording the fact unconditionally would ALSO be correct, since
+        # `_additivity` returns on the prefix condition first, but it would make
+        # the plan claim a second reason the caller never sees.
+        if prefix_overlap is None and overlap is not None:
             rp, blocking = overlap
-            additive = False
-            non_additive_reason = (
-                f"'{metric.name}' is grouped by '{rp.name}', which is reached "
-                f"through '{blocking.link.name}' ({blocking.link.effective_cardinality}). "
-                f"Each group is correct, but one '{metric.grain}' row belongs to "
-                f"every group it can reach, so this column will not sum to the "
-                f"total."
+            group_key_overlap = GroupKeyOverlap(
+                key_name=rp.name,
+                link_name=blocking.link.name,
+                cardinality=blocking.link.effective_cardinality,
+                grain=metric.grain,
             )
 
         plan.metric_plans.append(
@@ -210,8 +317,8 @@ def analyse(rq: ResolvedQuery, metadata: MetaData) -> GrainPlan:
                 metric=metric,
                 strategy=strategy,
                 forced_by=forced_by,
-                additive=additive,
-                non_additive_reason=non_additive_reason,
+                prefix_overlap=prefix_overlap,
+                group_key_overlap=group_key_overlap,
             )
         )
 
