@@ -12,6 +12,9 @@ are checked against the live `non_additive_reason` string: if the fact says
 `Playlist_Tracks`, the reason must say so too, because that is precisely the
 agreement the later derivation task will depend on.
 """
+import ast
+import inspect
+import textwrap
 from dataclasses import dataclass, fields
 
 import pytest
@@ -20,6 +23,7 @@ from grain.engine.grain import (
     IRRELEVANT_TO_ADDITIVITY,
     _ADDITIVITY_INPUTS,
     MetricPlan,
+    _additivity,
     analyse,
 )
 from grain.engine.resolve import resolve
@@ -179,9 +183,89 @@ def test_the_census_actually_rejects_a_field_nobody_classified():
         )
 
 
+def _attributes_read_off_the_argument(func):
+    """Every attribute `func` takes off its own first parameter, by parsing it.
+
+    Records the attribute DIRECTLY on the parameter, never the tail of a chain:
+    `plan.metric.name` counts as `metric`, because the census classifies the
+    PLAN's fields and `name` is a fact about `Metric`, not about `MetricPlan`.
+    Matching only `Attribute(value=Name(param))` gets that for free — the outer
+    node of a chain has an `Attribute` for its value, so it does not match — but
+    it is the intended reading rather than a happy accident: classifying `name`
+    would be classifying a field of the wrong class, and no census of
+    `MetricPlan` could ever satisfy it.
+
+    A local `o = plan.overlap_link` followed by `o.link_name` is likewise out of
+    scope by design. `overlap_link` is recorded at the binding; the fact's own
+    members are its internals, and `OverlapFact` is frozen and derived from a
+    decision already made.
+    """
+    fn = ast.parse(textwrap.dedent(inspect.getsource(func))).body[0]
+    param = fn.args.args[0].arg
+    return {
+        node.attr
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == param
+    }
+
+
+def test_the_derivation_reads_only_classified_fields():
+    """The census, checked against the code instead of asserted beside it.
+
+    `test_every_metric_plan_field_is_classified` proves no field was FORGOTTEN.
+    It cannot prove the classification is TRUE: a hand-maintained list can say
+    `metric` is irrelevant while the function under it dereferences `metric` on
+    the next line, and that is precisely what it said until this test was
+    written. Reading the answer out of `_additivity` itself is the same move as
+    the task — derive the claim from the code rather than maintain it alongside.
+    """
+    read = _attributes_read_off_the_argument(_additivity)
+    unclassified = read - _ADDITIVITY_INPUTS
+    assert not unclassified, (
+        f"_additivity reads plan attributes that are not additivity inputs: "
+        f"{sorted(unclassified)}. Either the derivation should not be reading "
+        f"them, or they belong in _ADDITIVITY_INPUTS (and out of "
+        f"IRRELEVANT_TO_ADDITIVITY, whose entry is then a false claim)."
+    )
+    # Not asserted as equality. A field can be an acknowledged input that the
+    # current conditions happen not to dereference — `grouped` would be, were
+    # the level condition ever expressed some other way — and demanding every
+    # input be read would pressure someone into deleting the classification
+    # rather than the dead code. The direction that matters is the one that
+    # catches a claim the code contradicts.
+
+
+def test_the_reads_check_catches_an_unclassified_attribute():
+    """The failure path, on a local function, for the same reason the census
+    proof is local: a check whose failure is never exercised is a check of
+    nothing, and reverting an edit to `grain.py` discards uncommitted work.
+
+    Doubles as the pin for the chain rule — `plan.metric.name` must report
+    `metric`, and `plan` itself appearing bare must report nothing.
+    """
+    def _pretend_additivity(plan):
+        if plan.window is not None and plan.smuggled_claim:
+            return False, f"'{plan.metric.name}' is not summable"
+        return True, plan
+
+    read = _attributes_read_off_the_argument(_pretend_additivity)
+    assert read == {"window", "smuggled_claim", "metric"}, read
+    assert "name" not in read
+
+    unclassified = read - _ADDITIVITY_INPUTS
+    assert unclassified == {"smuggled_claim"}
+
+
 def test_every_irrelevance_carries_a_reason():
     """The reason string IS the deliverable — it records the judgement that was
     missing when `window` was added. An empty or one-word entry passes the
-    census while skipping the thinking it exists to force."""
+    census while skipping the thinking it exists to force.
+
+    A TRIPWIRE, NOT A GUARANTEE. No mechanical test can tell a real judgement
+    from five plausible words; this one stops a blank or a shrug, and the
+    reading is still yours. Task 3 copies this file's shape into the symmetric
+    engine — the next reader should know which of the two this is."""
     for name, reason in IRRELEVANT_TO_ADDITIVITY.items():
         assert len(reason.split()) >= 5, f"{name}: reason too thin to be a judgement"

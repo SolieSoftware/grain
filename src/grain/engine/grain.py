@@ -87,15 +87,21 @@ class MetricPlan:
 # The fields the additivity verdict is derived from. Adding a field that can
 # affect whether a column sums to the total means adding it here AND handling
 # it in `_additivity`; the census test refuses an unclassified field.
-_ADDITIVITY_INPUTS = frozenset({"overlap_link", "separated_fan", "grouped", "window"})
+#
+# `metric` is an input because `_additivity` dereferences it, and that is
+# checked rather than asserted: `test_the_derivation_reads_only_classified_fields`
+# parses the function and refuses an attribute missing from this set. It supplies
+# the LABEL every reason string names and nothing else — `window` is the only
+# route by which anything about the metric reaches the boolean. It was listed as
+# irrelevant until that test was written, which is exactly the disagreement
+# between a claim and the code under it that this whole task exists to remove.
+_ADDITIVITY_INPUTS = frozenset(
+    {"overlap_link", "separated_fan", "grouped", "window", "metric"}
+)
 
 # Fields that provably cannot change the verdict, each with the reason. The
 # reason is the record of the judgement — see the census test.
 IRRELEVANT_TO_ADDITIVITY: dict[str, str] = {
-    "metric": (
-        "identifies which metric this is; its own quantity reaches the verdict "
-        "through window"
-    ),
     "strategy": (
         "chooses the SQL shape, and both shapes are correct per group; overlap "
         "is a property of the path"
