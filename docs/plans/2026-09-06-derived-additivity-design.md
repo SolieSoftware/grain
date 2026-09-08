@@ -70,6 +70,26 @@ and returns the verdict. `MetricPlan.additive` and `.non_additive_reason` become
 properties delegating to it, so every existing caller — `GrainPlan.additive`,
 `agent/tools.py`, `describe.py`, the CLI — is untouched.
 
+### 3a. A refusal is hiding inside a reason string
+
+Condition 1 does not only describe; it **decides**. Building its reason calls
+`_require_identifying_keys(rq, metric, edge.link.name)`, which RAISES
+`NonAdditiveRefused` when the group keys do not identify one row of the object
+being grouped — because surfacing overlap as a flag is only defensible while the
+per-group numbers are correct, and where they are not the engine itself would do
+the wrong summing and no flag could rescue the caller.
+
+So a refusal currently lives on the path that constructs a claim. Separating
+decisions from claims forces it out, which is an argument for this restructuring
+rather than a complication of it:
+
+- `analyse()` keeps the call — refusing is a decision — and stores the
+  identifying keys it returned as a fact on the plan.
+- `_additivity(plan)` reads those keys to build the reason and **never raises**.
+
+A derivation that can raise is not a derivation; it is a second decision point
+wearing a property's clothes.
+
 **Duplicated, not shared.** Each engine gets its own `_additivity`, exactly as
 `engine_symmetric/resolve.py` is a deliberate copy of `engine/resolve.py`. A
 shared derivation would put the rule in the layer the differential harness
