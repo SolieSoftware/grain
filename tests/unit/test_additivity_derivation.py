@@ -588,3 +588,150 @@ def test_the_two_derivations_are_not_the_same_object():
     # And the difference that must survive: two conditions here, three there.
     assert "window" in _ADDITIVITY_INPUTS
     assert "window" not in SYMMETRIC_ADDITIVITY_INPUTS
+
+
+# ---------------------------------------------------------------------------
+# Parity, and the layer above.
+#
+# The two checks that no amount of per-engine testing gives you: that the
+# deliberate duplication has not DRIFTED, and that the verdict actually reaches
+# the caller who has to act on it.
+# ---------------------------------------------------------------------------
+
+# Shapes both engines answer, over the ontology both can load. Deliberately
+# spanning both verdicts: a parity test over non-additive shapes alone would
+# pass with a derivation that returned False for everything.
+#
+# `chinook_lite` rather than `chinook_ontology`, unlike the subquery half of
+# this file: parity is a claim about two derivations reading one ontology, and
+# the symmetric engine's `analyse` needs the MetaData that ontology was loaded
+# from. Using the lite pair keeps both halves reading the same thing and needs
+# no database, so the parity claim cannot quietly become a skip.
+_SHAPES_BOTH_ENGINES_ANSWER = [
+    dict(object="InvoiceLine", metrics=["revenue"]),
+    dict(object="Invoice", traverse=[Hop(link="Invoice_Lines")], metrics=["revenue"]),
+    dict(object="Customer", traverse=[Hop(link="Customer_Invoices")],
+         metrics=["distinct_customers"], group_by=["country"]),
+    dict(object="Customer", traverse=[Hop(link="Customer_Invoices"),
+         Hop(link="Invoice_Lines")], metrics=["revenue"], group_by=["country"]),
+    dict(object="Playlist", traverse=[Hop(link="Playlist_Tracks"),
+         Hop(link="Track_InvoiceLines")], metrics=["revenue"], group_by=["id"]),
+    dict(object="Playlist", traverse=[Hop(link="Playlist_Tracks")],
+         metrics=["distinct_tracks"], group_by=["id"]),
+    dict(object="Employee", traverse=[Hop(link="Employee_Manager")],
+         metrics=["distinct_employees"], group_by=["Employee_Manager.id"]),
+]
+
+
+def test_both_engines_agree_on_additivity_where_both_answer(chinook_lite, lite_metadata):
+    """The derivations are deliberately duplicated, so drift is possible by
+    design — this is `test_resolver_parity.py`'s job done for the verdict.
+
+    Only the VERDICT is compared. The reason strings differ legitimately and
+    must keep differing: the symmetric engine says the encoding counts each row
+    once, the subquery engine names the identifying keys its own
+    `NonAdditiveRefused` validated.
+
+    WHERE BOTH ANSWER is a real restriction, not a hedge. The symmetric engine
+    has a condition the subquery engine lacks — a group key beyond the metric's
+    prefix — and on that one shape (`distinct_employees` grouped by
+    `Employee_Manager.last_name`) the subquery engine raises `KeyBeyondGrain`
+    instead of answering, which is the accident recorded beside
+    `_ADDITIVITY_INPUTS` and pinned by
+    `test_immune_aggregates.py::test_immunity_does_not_lift_the_key_beyond_grain_refusal`.
+    It is excluded here because a refusal is not a disagreement; if that refusal
+    is ever lifted without the derivation being fixed, that test goes red, not
+    this one.
+    """
+    verdicts = []
+    for kw in _SHAPES_BOTH_ENGINES_ANSWER:
+        sub = analyse(resolve(QuerySpec(**kw), chinook_lite)).additive
+        sym = symmetric_analyse(
+            symmetric_resolve(QuerySpec(**kw), chinook_lite), lite_metadata
+        ).additive
+        assert sub == sym, f"engines disagree on additivity for {kw}: {sub} vs {sym}"
+        verdicts.append(sub)
+
+    # Both answers present, so the parity above is not vacuous.
+    assert True in verdicts and False in verdicts, verdicts
+
+
+class _ResultWithTheEngineVerdict:
+    """The shape `agent/tools.py` reads, carrying a REAL plan's verdict.
+
+    Only the two additivity fields are real; rows, columns and the other two
+    caveat sources are filler, because what is under test is whether the verdict
+    survives the trip from the derivation to the text a model reads. Executing
+    the query would add a database to a claim that has nothing to do with one —
+    the rendering is pure given a result.
+    """
+
+    def __init__(self, plan):
+        self.additive = plan.additive
+        self.non_additive_reason = plan.non_additive_reason
+        self.rows = [(1, "2.99")]
+        self.columns = ["id", "revenue"]
+        self.limit_reached = False
+        self.rewrites = []
+
+
+class _GrainReturning:
+    def __init__(self, result):
+        self._result = result
+
+    def query(self, spec):
+        return self._result
+
+
+_NON_ADDITIVE_SPEC = {
+    "object": "Playlist",
+    "traverse": [{"link": "Playlist_Tracks"}, {"link": "Track_InvoiceLines"}],
+    "metrics": ["revenue"],
+    "group_by": ["id"],
+}
+
+
+def test_the_agent_is_told_not_to_add_a_non_additive_column(chinook_ontology):
+    """The flag's only job is to reach the caller, so the derivation is checked
+    through the layer that acts on it.
+
+    A correct verdict that never renders is the same defect one layer along —
+    and that is not hypothetical: the defect this whole plan closes reached the
+    model as ADVICE, because `agent/tools.py` emits its caveat only when
+    `additive` is False and the prompt tells the model to total otherwise. So
+    the assertion runs the real derivation, hands its verdict to the real
+    `run()`, and reads the text.
+    """
+    from grain.agent import tools
+
+    mp = _plan(
+        chinook_ontology,
+        object="Playlist",
+        traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")],
+        metrics=["revenue"],
+        group_by=["id"],
+    )
+    assert mp.additive is False
+    assert mp.non_additive_reason is not None
+
+    text, is_error = tools.run(
+        _GrainReturning(_ResultWithTheEngineVerdict(mp)), _NON_ADDITIVE_SPEC
+    )
+    assert not is_error
+    assert "NOT ADDITIVE" in text
+    assert "do NOT add them together" in text
+    # The derivation's own reason, verbatim, not a generic warning: the fact
+    # that made the verdict False is what the model needs in order to say
+    # anything useful about the rows.
+    assert mp.non_additive_reason in text
+    assert "Playlist_Tracks" in text
+
+
+def test_an_additive_verdict_renders_no_caveat(chinook_ontology):
+    """The other half, without which the check above passes for a renderer that
+    warns on everything — and a warning on every result is a warning on none."""
+    from grain.agent.tools import _caveats
+
+    mp = _plan(chinook_ontology, object="InvoiceLine", metrics=["revenue"])
+    assert mp.additive is True
+    assert _caveats(_ResultWithTheEngineVerdict(mp)) == []
