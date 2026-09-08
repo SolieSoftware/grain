@@ -95,6 +95,20 @@ class MetricPlan:
 # route by which anything about the metric reaches the boolean. It was listed as
 # irrelevant until that test was written, which is exactly the disagreement
 # between a claim and the code under it that this whole task exists to remove.
+#
+# A KNOWN HOLE, recorded here because this is where someone extending the
+# derivation will look. `overlap_link` is derived from the metric's PREFIX, which
+# is EMPTY for a metric measured at the root — so a root-grain metric grouped by
+# an ancestor key has overlapping groups this derivation cannot see, and would
+# report `additive: true` for a column that cannot sum to the total. Nothing in
+# this file catches it; `KeyBeyondGrain` does, BY ACCIDENT, and
+# tests/unit/test_immune_aggregates.py::test_immunity_does_not_lift_the_key_beyond_grain_refusal
+# is what stops that accident being removed — it refuses to lift the refusal
+# precisely because the verdict is riding on it. Fixing it properly means
+# following the path to the GROUP KEY, as engine_symmetric/grain.py::_overlap
+# already does (`group_key_overlap`). Deliberately out of scope of the
+# restructuring that produced this comment: it is a semantic change, and mixing
+# it in would make a behavioural difference impossible to attribute.
 _ADDITIVITY_INPUTS = frozenset(
     {"overlap_link", "separated_fan", "grouped", "window", "metric"}
 )
