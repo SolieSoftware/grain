@@ -22,6 +22,32 @@ class WindowSpec:
 
 
 @dataclass(frozen=True)
+class OverlapFact:
+    """A many_to_many edge on the metric's own prefix, plus the keys a refusal
+    has ALREADY validated as identifying. Stored rather than recomputed: the
+    validation is a decision (`_require_identifying_keys` raises), and the
+    derivation that reads this must never raise."""
+
+    link_name: str
+    cardinality: str
+    identifying_keys: str
+    subject: str
+
+
+@dataclass(frozen=True)
+class SeparatedFan:
+    """A fanning edge downstream of the grain whose target a unique group key
+    pins, so its copies scatter into distinct groups instead of piling into
+    one. Correct per group; the total counts one row in every group it joins."""
+
+    link_name: str
+    cardinality: str
+    to_object_name: str
+    pin_name: str
+    grain: str
+
+
+@dataclass(frozen=True)
 class MetricPlan:
     metric: Metric
     strategy: Strategy
@@ -39,6 +65,13 @@ class MetricPlan:
     # `subquery_edges` is: a window applied over a different column from the one
     # this analysis reasoned about would silently invalidate the verdict.
     window: WindowSpec | None = None
+    # The facts the additivity verdict is derived from. Stored so the verdict
+    # can be a function of the finished plan rather than a variable accumulated
+    # beside it — see docs/plans/2026-09-06-derived-additivity-design.md. Three
+    # Criticals have been caused by a decision and its claim disagreeing.
+    overlap_link: OverlapFact | None = None
+    separated_fan: SeparatedFan | None = None
+    grouped: bool = False
 
 
 @dataclass
@@ -336,6 +369,8 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
         # all-one-to-many prefix and remain perfectly additive.
         additive = True
         non_additive_reason: str | None = None
+        overlap_fact: OverlapFact | None = None
+        separated_fact: SeparatedFan | None = None
         for edge in prefix:
             # `effective_cardinality`, not `cardinality`: a recursive link
             # declares the one-hop fact (many_to_one — one manager) while a
@@ -353,6 +388,12 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
                 identifying = _require_identifying_keys(rq, metric, edge.link.name)
                 keys = ", ".join(rp.name for rp in identifying)
                 subject = identifying[0].object.name
+                overlap_fact = OverlapFact(
+                    link_name=edge.link.name,
+                    cardinality=edge.link.effective_cardinality,
+                    identifying_keys=keys,
+                    subject=subject,
+                )
                 non_additive_reason = (
                     f"'{metric.name}' is grouped across '{edge.link.name}', which is "
                     f"{edge.link.effective_cardinality}. Each group is correct — "
@@ -370,6 +411,13 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
             index, edge = separated[0]
             pin = _pinned_by_a_unique_key(rq, index)
             additive = False
+            separated_fact = SeparatedFan(
+                link_name=edge.link.name,
+                cardinality=edge.link.effective_cardinality,
+                to_object_name=edge.to_object.name,
+                pin_name=pin.name,
+                grain=metric.grain,
+            )
             non_additive_reason = (
                 f"'{metric.name}' is counted once per {edge.to_object.name} reached "
                 f"through '{edge.link.name}', which is "
@@ -437,6 +485,9 @@ def analyse(rq: ResolvedQuery) -> GrainPlan:
                 non_additive_reason=non_additive_reason,
                 subquery_edges=subquery_edges,
                 window=window,
+                overlap_link=overlap_fact,
+                separated_fan=separated_fact,
+                grouped=bool(rq.group_by),
             )
         )
 
