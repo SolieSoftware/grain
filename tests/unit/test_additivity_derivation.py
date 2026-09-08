@@ -12,7 +12,16 @@ are checked against the live `non_additive_reason` string: if the fact says
 `Playlist_Tracks`, the reason must say so too, because that is precisely the
 agreement the later derivation task will depend on.
 """
-from grain.engine.grain import analyse
+from dataclasses import dataclass, fields
+
+import pytest
+
+from grain.engine.grain import (
+    IRRELEVANT_TO_ADDITIVITY,
+    _ADDITIVITY_INPUTS,
+    MetricPlan,
+    analyse,
+)
 from grain.engine.resolve import resolve
 from grain.engine.spec import Hop, QuerySpec
 
@@ -98,3 +107,81 @@ def test_an_additive_verdict_has_no_overlap_or_separated_fact(chinook_ontology):
     assert mp.overlap_link is None
     assert mp.separated_fan is None
     assert mp.grouped is False
+
+
+def _assert_census_complete(plan_type, inputs, irrelevant):
+    """The census itself, applied to a dataclass rather than hard-wired to one.
+
+    Written as a function so the proof below can run it against a type that
+    DOES have a forgotten field. A census whose own failure path is never
+    exercised is a test of nothing — and the failure path is the entire product
+    here, since the passing path is what the codebase already looked like on
+    the day `window` was added.
+    """
+    names = {f.name for f in fields(plan_type)}
+    classified = inputs | set(irrelevant)
+    unclassified = names - classified
+    assert not unclassified, (
+        f"MetricPlan fields not classified for additivity: {sorted(unclassified)}. "
+        f"Add each to _ADDITIVITY_INPUTS, or to IRRELEVANT_TO_ADDITIVITY with a "
+        f"one-line reason it cannot affect whether the column sums to the total."
+    )
+    assert not (inputs & set(irrelevant)), "a field cannot be both an input and irrelevant"
+    stale = classified - names
+    assert not stale, f"classified fields that no longer exist: {sorted(stale)}"
+
+
+def test_every_metric_plan_field_is_classified():
+    """A new field on MetricPlan must be declared either an input to the
+    additivity derivation or explicitly irrelevant, with a reason.
+
+    This is the point of the exercise. `window` was added beside `additive`
+    without either knowing about the other, and the result was a level
+    reported as summable — 1153, the exact figure a test pins as wrong.
+    Forgetting is now a red test naming the field, not a reading someone has
+    to do."""
+    _assert_census_complete(MetricPlan, _ADDITIVITY_INPUTS, IRRELEVANT_TO_ADDITIVITY)
+
+
+def test_the_census_actually_rejects_a_field_nobody_classified():
+    """The census's own failure path, proved on a local dataclass.
+
+    Proving it by editing the real `MetricPlan` and reverting would make this a
+    one-off ritual performed by whoever remembered — and reverting a source file
+    discards whatever else was uncommitted. Done here it is a standing test that
+    runs on every suite.
+    """
+    @dataclass(frozen=True)
+    class PlanWithAForgottenField:
+        overlap_link: str | None = None
+        window: str | None = None
+        forgotten_field: int = 0
+
+    with pytest.raises(AssertionError, match="forgotten_field"):
+        _assert_census_complete(
+            PlanWithAForgottenField, frozenset({"overlap_link", "window"}), {}
+        )
+
+    # And the two subtler failures, which a census that only counted names
+    # would miss: a field claimed twice, and a classification left behind by a
+    # field that has since been deleted.
+    with pytest.raises(AssertionError, match="both an input and irrelevant"):
+        _assert_census_complete(
+            PlanWithAForgottenField,
+            frozenset({"overlap_link", "window", "forgotten_field"}),
+            {"window": "claimed in both places"},
+        )
+    with pytest.raises(AssertionError, match="no longer exist"):
+        _assert_census_complete(
+            PlanWithAForgottenField,
+            frozenset({"overlap_link", "window", "forgotten_field"}),
+            {"deleted_long_ago": "a classification outliving its field"},
+        )
+
+
+def test_every_irrelevance_carries_a_reason():
+    """The reason string IS the deliverable — it records the judgement that was
+    missing when `window` was added. An empty or one-word entry passes the
+    census while skipping the thinking it exists to force."""
+    for name, reason in IRRELEVANT_TO_ADDITIVITY.items():
+        assert len(reason.split()) >= 5, f"{name}: reason too thin to be a judgement"
