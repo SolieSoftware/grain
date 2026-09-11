@@ -18,6 +18,16 @@ reason that applies here too: a shared implementation makes the differential
 harness blind, because both engines inherit one bug and agree. The checks over
 them are shared even though the derivations are not, which is what makes the
 duplication's drift visible. See the section header lower down for what differs.
+
+NO DATABASE, ANYWHERE IN THIS FILE. Every assertion here is about an ontology
+and a plan derived from it; not one executes a query. Five of these tests took
+`chinook_ontology` anyway, which needs `GRAIN_DATABASE_URL` and so SKIPPED
+without one — and this project's characteristic trap is precisely a green run
+that skipped the tests which would have failed, which is why `CLAUDE.md` tells
+readers to check the skip count rather than the colour. A test that joins the
+skippable set for no reason works against that number. `chinook_lite` declares
+every object, link and metric these need and loads from `lite_metadata`, so the
+claims below hold in both configurations.
 """
 import ast
 import inspect
@@ -69,19 +79,20 @@ def _plan(onto, **kw):
     return analyse(rq).metric_plans[0]
 
 
-def test_a_non_additive_verdict_always_has_a_fact_behind_it(chinook_ontology):
+def test_a_non_additive_verdict_always_has_a_fact_behind_it(chinook_lite):
     """Every False verdict must be explained by a stored fact, and the fact's
     own fields must be the ones the live reason string actually names — not
     merely present, but correct.
 
-    Playlist's only unique key is `id` (chinook ships duplicate playlist
-    names), so `group_by=["id"]` is the legal, single-key form — see
+    Playlist's only unique key is `id` — chinook ships duplicate playlist names,
+    and `chinook_lite` mirrors that by declaring `name` nullable and non-unique
+    — so `group_by=["id"]` is the legal, single-key form. See
     `test_a_unique_key_alongside_a_non_unique_one_is_enough` in
     test_grain_additivity.py. revenue's prefix crosses Playlist_Tracks, a
     many_to_many, so the groups overlap even though each is correct.
     """
     mp = _plan(
-        chinook_ontology,
+        chinook_lite,
         object="Playlist",
         traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")],
         metrics=["revenue"],
@@ -106,7 +117,7 @@ def test_a_non_additive_verdict_always_has_a_fact_behind_it(chinook_ontology):
     assert fact.subject in reason
 
 
-def test_a_separated_fan_verdict_also_has_a_fact_that_agrees_with_the_reason(chinook_ontology):
+def test_a_separated_fan_verdict_also_has_a_fact_that_agrees_with_the_reason(chinook_lite):
     """The mirror shape: `employee_count` is measured at the ROOT's grain, so
     its prefix is empty and no `OverlapFact` can fire — but the fanning
     `Employee_Manager` hop downstream of it is pinned by a unique group key,
@@ -114,7 +125,7 @@ def test_a_separated_fan_verdict_also_has_a_fact_that_agrees_with_the_reason(chi
     above: the fact's fields must be the ones the reason names.
     """
     mp = _plan(
-        chinook_ontology,
+        chinook_lite,
         object="Employee",
         traverse=[Hop(link="Employee_Manager")],
         metrics=["employee_count"],
@@ -139,8 +150,8 @@ def test_a_separated_fan_verdict_also_has_a_fact_that_agrees_with_the_reason(chi
     assert fact.grain in reason
 
 
-def test_an_additive_verdict_has_no_overlap_or_separated_fact(chinook_ontology):
-    mp = _plan(chinook_ontology, object="InvoiceLine", metrics=["revenue"])
+def test_an_additive_verdict_has_no_overlap_or_separated_fact(chinook_lite):
+    mp = _plan(chinook_lite, object="InvoiceLine", metrics=["revenue"])
     assert mp.additive is True
     assert mp.overlap_link is None
     assert mp.separated_fan is None
@@ -706,11 +717,13 @@ def test_the_two_derivations_are_not_the_same_object():
 # spanning both verdicts: a parity test over non-additive shapes alone would
 # pass with a derivation that returned False for everything.
 #
-# `chinook_lite` rather than `chinook_ontology`, unlike the subquery half of
-# this file: parity is a claim about two derivations reading one ontology, and
-# the symmetric engine's `analyse` needs the MetaData that ontology was loaded
-# from. Using the lite pair keeps both halves reading the same thing and needs
-# no database, so the parity claim cannot quietly become a skip.
+# `chinook_lite`: parity is a claim about two derivations reading one ontology,
+# and the symmetric engine's `analyse` needs the MetaData that ontology was
+# loaded from. Using the lite pair keeps both halves reading the same thing and
+# needs no database, so the parity claim cannot quietly become a skip.
+#
+# That argument was written here first and applies to EVERY test in this file;
+# it is now carried across — see the module docstring.
 _SHAPES_BOTH_ENGINES_ANSWER = [
     dict(object="InvoiceLine", metrics=["revenue"]),
     dict(object="Invoice", traverse=[Hop(link="Invoice_Lines")], metrics=["revenue"]),
@@ -883,7 +896,7 @@ _NON_ADDITIVE_SPEC = {
 }
 
 
-def test_the_agent_is_told_not_to_add_a_non_additive_column(chinook_ontology):
+def test_the_agent_is_told_not_to_add_a_non_additive_column(chinook_lite):
     """The flag's only job is to reach the caller, so the derivation is checked
     through the layer that acts on it.
 
@@ -897,7 +910,7 @@ def test_the_agent_is_told_not_to_add_a_non_additive_column(chinook_ontology):
     from grain.agent import tools
 
     mp = _plan(
-        chinook_ontology,
+        chinook_lite,
         object="Playlist",
         traverse=[Hop(link="Playlist_Tracks"), Hop(link="Track_InvoiceLines")],
         metrics=["revenue"],
@@ -919,11 +932,11 @@ def test_the_agent_is_told_not_to_add_a_non_additive_column(chinook_ontology):
     assert "Playlist_Tracks" in text
 
 
-def test_an_additive_verdict_renders_no_caveat(chinook_ontology):
+def test_an_additive_verdict_renders_no_caveat(chinook_lite):
     """The other half, without which the check above passes for a renderer that
     warns on everything — and a warning on every result is a warning on none."""
     from grain.agent.tools import _caveats
 
-    mp = _plan(chinook_ontology, object="InvoiceLine", metrics=["revenue"])
+    mp = _plan(chinook_lite, object="InvoiceLine", metrics=["revenue"])
     assert mp.additive is True
     assert _caveats(_ResultWithTheEngineVerdict(mp)) == []
