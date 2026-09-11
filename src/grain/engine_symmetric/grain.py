@@ -92,9 +92,25 @@ class MetricPlan:
 # `_additivity`; the census test refuses an unclassified field, and the AST check
 # refuses a read this set does not list.
 #
-# `metric` is an input because `_additivity` dereferences it — it supplies the
-# LABEL every reason string names, and nothing else about the metric reaches the
-# boolean. Listing it as irrelevant would be a false claim the AST check catches.
+# `metric` is an input because `_additivity` dereferences it — INSIDE that
+# function it supplies the LABEL every reason string names and nothing else.
+# Listing it as irrelevant would be a false claim the AST check catches.
+#
+# SCOPED TO THAT FUNCTION, deliberately. The claim is NOT that nothing else
+# about the metric reaches the verdict: `analyse` computes
+# `prefix = path_to_table(rq, metric.grain)` and `prefix_overlap` is derived
+# from it, so the metric's GRAIN reaches the boolean before `_additivity` runs.
+# The subquery engine's copy of this comment said "nothing else", and here it
+# was doubly wrong — it also named `window` as the one remaining route, and this
+# engine has no window condition at all (see `_additivity`'s docstring).
+#
+# The prefix condition below shares the subquery engine's known hole: it tests
+# `effective_cardinality == "many_to_many"` only, and a `many_to_one` prefix
+# edge makes the grain rows PARENTS shared across root rows — the same overlap,
+# undetected, in BOTH engines, which is exactly why the differential harness
+# cannot see it. Measured figures, and why neither standing safety net catches
+# it, are in `engine/grain.py` beside its own `_ADDITIVITY_INPUTS`; the work is
+# item 1 of docs/BACKLOG.md. Pre-existing, not introduced with this derivation.
 _ADDITIVITY_INPUTS = frozenset({"prefix_overlap", "group_key_overlap", "metric"})
 
 # Fields that provably cannot change the verdict, each with the reason. The

@@ -90,25 +90,54 @@ class MetricPlan:
 #
 # `metric` is an input because `_additivity` dereferences it, and that is
 # checked rather than asserted: `test_the_derivation_reads_only_classified_fields`
-# parses the function and refuses an attribute missing from this set. It supplies
-# the LABEL every reason string names and nothing else — `window` is the only
-# route by which anything about the metric reaches the boolean. It was listed as
-# irrelevant until that test was written, which is exactly the disagreement
-# between a claim and the code under it that this whole task exists to remove.
+# parses the function and refuses an attribute missing from this set. INSIDE
+# `_additivity` it supplies the LABEL every reason string names and nothing else,
+# and `window` is the only route by which anything about the metric reaches the
+# boolean FROM THERE. The scoping is the whole of the claim, and was missing from
+# it: `analyse` computes `prefix = path_to_table(rq, metric.grain)`, and BOTH
+# `overlap_link` and `separated_fan` are derived from that prefix — so the
+# metric's GRAIN reaches the verdict by two further routes, before this function
+# runs. `metric` was listed as irrelevant until the reads test was written, which
+# is exactly the disagreement between a claim and the code under it that this
+# whole task exists to remove; reading the sentence unscoped re-introduces it.
 #
-# A KNOWN HOLE, recorded here because this is where someone extending the
-# derivation will look. `overlap_link` is derived from the metric's PREFIX, which
-# is EMPTY for a metric measured at the root — so a root-grain metric grouped by
-# an ancestor key has overlapping groups this derivation cannot see, and would
-# report `additive: true` for a column that cannot sum to the total. Nothing in
-# this file catches it; `KeyBeyondGrain` does, BY ACCIDENT, and
-# tests/unit/test_immune_aggregates.py::test_immunity_does_not_lift_the_key_beyond_grain_refusal
-# is what stops that accident being removed — it refuses to lift the refusal
-# precisely because the verdict is riding on it. Fixing it properly means
-# following the path to the GROUP KEY, as engine_symmetric/grain.py::_overlap
-# already does (`group_key_overlap`). Deliberately out of scope of the
-# restructuring that produced this comment: it is a semantic change, and mixing
-# it in would make a behavioural difference impossible to attribute.
+# TWO KNOWN HOLES, recorded here because this is where someone extending the
+# derivation will look. Both sit in the same place — `overlap_link` is derived
+# from the metric's PREFIX, and asks that prefix one question.
+#
+# 1. AN EMPTY PREFIX. A metric measured at the root has no prefix at all, so a
+#    root-grain metric grouped by an ancestor key has overlapping groups this
+#    derivation cannot see, and would report `additive: true` for a column that
+#    cannot sum to the total. Nothing in this file catches it; `KeyBeyondGrain`
+#    does, BY ACCIDENT, and
+#    tests/unit/test_immune_aggregates.py::test_immunity_does_not_lift_the_key_beyond_grain_refusal
+#    is what stops that accident being removed — it refuses to lift the refusal
+#    precisely because the verdict is riding on it. Fixing it means following the
+#    path to the GROUP KEY, as engine_symmetric/grain.py::_overlap already does
+#    (`group_key_overlap`).
+#
+# 2. A `many_to_one` EDGE IN THE PREFIX — WIDER, AND NOT CLOSED BY FIXING (1).
+#    The condition below tests `effective_cardinality == "many_to_many"` only.
+#    A `many_to_one` hop means the grain rows are the PARENTS: one grain row is
+#    reachable from many root rows, so it lands in several groups and the column
+#    cannot sum to the total — the same defect, by the same mechanism. The
+#    measured instances have a NON-EMPTY prefix and are grouped by a BARE ROOT
+#    KEY, so `_overlap` skips them (`edge_index is None`) and `KeyBeyondGrain`
+#    does not fire: following the path to the group key would not catch either.
+#    Neither engine detects it — `engine_symmetric` carries the same
+#    `many_to_many`-only test, so both agree and the differential harness sees
+#    nothing, and `tools/oracle.py` agrees per group because each group IS
+#    correct. Measured: `Customer --Customer_SupportRep--> Employee`,
+#    `employee_count` grouped by `email`, reports `additive: true` with 59 groups
+#    of 1 against a true headcount of 3; `Track --Track_Album--> Album
+#    --Album_Tracks--> Track --Track_InvoiceLines--> InvoiceLine`, `revenue` by
+#    `composer`, sums to 35368.77 (subquery) / 9346.71 (symmetric) against the
+#    2328.60 anchor. PRE-EXISTING — byte-identical at 9014e49, not introduced by
+#    the restructuring that produced this comment. Item 1 of docs/BACKLOG.md.
+#
+# Both are deliberately out of scope of that restructuring: they are semantic
+# changes, and mixing one in would make a behavioural difference impossible to
+# attribute.
 _ADDITIVITY_INPUTS = frozenset(
     {"overlap_link", "separated_fan", "grouped", "window", "metric"}
 )
