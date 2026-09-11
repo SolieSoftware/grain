@@ -30,7 +30,9 @@ from grain.engine.errors import MetricNotSymmetric
 from grain.engine.grain import (
     IRRELEVANT_TO_ADDITIVITY,
     _ADDITIVITY_INPUTS,
+    GrainPlan,
     MetricPlan,
+    OverlapFact,
     _additivity,
     analyse,
 )
@@ -44,7 +46,13 @@ from grain.engine_symmetric.grain import (
     _ADDITIVITY_INPUTS as SYMMETRIC_ADDITIVITY_INPUTS,
 )
 from grain.engine_symmetric.grain import (
+    GrainPlan as SymmetricGrainPlan,
+)
+from grain.engine_symmetric.grain import (
     MetricPlan as SymmetricMetricPlan,
+)
+from grain.engine_symmetric.grain import (
+    PrefixOverlap,
 )
 from grain.engine_symmetric.grain import (
     _additivity as _symmetric_additivity,
@@ -750,6 +758,94 @@ def test_both_engines_agree_on_additivity_where_both_answer(chinook_lite, lite_m
 
     # Both answers present, so the parity above is not vacuous.
     assert True in verdicts and False in verdicts, verdicts
+
+
+def _additive_metric(name):
+    return Metric(name=name, grain="invoice_line", type="decimal", agg="sum",
+                  value="invoice_line.unit_price")
+
+
+def test_a_mixed_plan_is_non_additive_and_reports_the_offending_metric():
+    """`GrainPlan.additive` folds the per-metric verdicts with `all`, and the
+    fold is the last mile: `EnginePlan`, `Result`, `agent/tools.py`, the CLI and
+    the MCP server all read this one boolean, never the per-metric ones.
+
+    HAND-BUILT, and deliberately so. Review measured that NO chinook query
+    produces a mixed plan — every root × path ≤ 4 hops × metric pair × group key
+    makes either all its metrics non-additive or none of them — so `all(...)` and
+    `self.metric_plans[0].additive` are indistinguishable on the corpus, and
+    replacing one with the other left all 590 tests green. The fold was
+    unreachable by accident of the fixture, not by construction. Two plans built
+    here reach it directly; waiting for a fixture that happens to produce one is
+    waiting for the corpus to change.
+
+    Order matters in the construction: the additive plan comes FIRST, so a fold
+    that read only the first metric would return True and this test would be the
+    thing that says so.
+    """
+    additive = MetricPlan(metric=_additive_metric("revenue"), strategy="inline")
+    assert additive.additive is True
+
+    non_additive = MetricPlan(
+        metric=_additive_metric("track_revenue"),
+        strategy="inline",
+        grouped=True,
+        overlap_link=OverlapFact(
+            link_name="Playlist_Tracks",
+            cardinality="many_to_many",
+            identifying_keys="id",
+            subject="Playlist",
+        ),
+    )
+    assert non_additive.additive is False
+
+    plan = GrainPlan(metric_plans=[additive, non_additive])
+    assert plan.additive is False
+    # And the reason the caller reads is the NON-additive metric's own, not a
+    # generic one and not `None` — a False verdict whose reason came back empty
+    # would render a caveat with nothing in it.
+    assert plan.non_additive_reason == non_additive.non_additive_reason
+    assert "Playlist_Tracks" in plan.non_additive_reason
+    assert "track_revenue" in plan.non_additive_reason
+
+    # The all-additive fold, without which the assertion above passes for a
+    # `GrainPlan` that reports False unconditionally.
+    assert GrainPlan(metric_plans=[additive, additive]).additive is True
+    assert GrainPlan(metric_plans=[additive, additive]).non_additive_reason is None
+
+
+def test_a_mixed_symmetric_plan_is_non_additive_and_reports_the_offending_metric():
+    """The same fold, in the other engine's own copy. `GrainPlan` is duplicated
+    for the reason `_additivity` is — a shared one would make the differential
+    harness blind — so a fix to one is not a fix to the other, and the mutation
+    that replaced `all(...)` with the first metric left 590 green HERE too."""
+    additive = SymmetricMetricPlan(
+        metric=_additive_metric("revenue"), strategy="inline"
+    )
+    assert additive.additive is True
+
+    non_additive = SymmetricMetricPlan(
+        metric=_additive_metric("track_revenue"),
+        strategy="symmetric",
+        prefix_overlap=PrefixOverlap(
+            link_name="Playlist_Tracks",
+            cardinality="many_to_many",
+            grain="invoice_line",
+        ),
+    )
+    assert non_additive.additive is False
+
+    plan = SymmetricGrainPlan(metric_plans=[additive, non_additive])
+    assert plan.additive is False
+    assert plan.non_additive_reason == non_additive.non_additive_reason
+    assert "Playlist_Tracks" in plan.non_additive_reason
+    assert "track_revenue" in plan.non_additive_reason
+
+    assert SymmetricGrainPlan(metric_plans=[additive, additive]).additive is True
+    assert (
+        SymmetricGrainPlan(metric_plans=[additive, additive]).non_additive_reason
+        is None
+    )
 
 
 class _ResultWithTheEngineVerdict:
