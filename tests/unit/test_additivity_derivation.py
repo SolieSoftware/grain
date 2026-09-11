@@ -139,7 +139,40 @@ def test_an_additive_verdict_has_no_overlap_or_separated_fact(chinook_ontology):
     assert mp.grouped is False
 
 
-def _assert_census_complete(plan_type, inputs, irrelevant):
+# The claims the census is a census OF. They are neither inputs to the
+# derivation nor irrelevant to it — they ARE it, so they need their own bucket
+# rather than a special case inside the walk.
+#
+# This bucket exists because of the escape the derivation task itself opened.
+# The census used to read `dataclasses.fields()` alone, and `additive` /
+# `non_additive_reason` stopped being fields on this branch: a second claim
+# added the same way — `@property safe_to_total` — was invisible to it, and the
+# whole suite stayed green. A census that cannot see the shape the code now uses
+# is a census of the shape the code used to have.
+THE_VERDICT = frozenset({"additive", "non_additive_reason"})
+
+
+def _claim_bearing_names(plan_type):
+    """Every name on `plan_type` that can carry a claim about the result.
+
+    FIELDS AND PROPERTIES, not fields alone. A derived verdict is a property, so
+    a census counting only fields would be blind to exactly the shape this
+    branch introduced — measured, not supposed: adding `safe_to_total` as a
+    property left all 590 tests green.
+
+    `getattr` on the CLASS is what distinguishes the two: a field with a default
+    returns the default, a property returns the descriptor itself. Methods are
+    not properties and are deliberately not swept in — a method is code, and the
+    AST check is what reads code.
+    """
+    return {f.name for f in fields(plan_type)} | {
+        name
+        for name in dir(plan_type)
+        if isinstance(getattr(plan_type, name, None), property)
+    }
+
+
+def _assert_census_complete(plan_type, inputs, irrelevant, verdict=THE_VERDICT):
     """The census itself, applied to a dataclass rather than hard-wired to one.
 
     Written as a function so the proof below can run it against a type that
@@ -148,28 +181,40 @@ def _assert_census_complete(plan_type, inputs, irrelevant):
     here, since the passing path is what the codebase already looked like on
     the day `window` was added.
     """
-    names = {f.name for f in fields(plan_type)}
-    classified = inputs | set(irrelevant)
+    names = _claim_bearing_names(plan_type)
+    classified = inputs | set(irrelevant) | set(verdict)
     unclassified = names - classified
     assert not unclassified, (
-        f"MetricPlan fields not classified for additivity: {sorted(unclassified)}. "
-        f"Add each to _ADDITIVITY_INPUTS, or to IRRELEVANT_TO_ADDITIVITY with a "
-        f"one-line reason it cannot affect whether the column sums to the total."
+        f"MetricPlan fields or properties not classified for additivity: "
+        f"{sorted(unclassified)}. Add each to _ADDITIVITY_INPUTS, or to "
+        f"IRRELEVANT_TO_ADDITIVITY with a one-line reason it cannot affect "
+        f"whether the column sums to the total — or, if it is itself a claim "
+        f"about the result rather than an input to one, to THE_VERDICT."
     )
     assert not (inputs & set(irrelevant)), "a field cannot be both an input and irrelevant"
+    assert not (set(verdict) & (inputs | set(irrelevant))), (
+        "a name cannot be both the verdict and an input to it"
+    )
     stale = classified - names
     assert not stale, f"classified fields that no longer exist: {sorted(stale)}"
 
 
 def test_every_metric_plan_field_is_classified():
-    """A new field on MetricPlan must be declared either an input to the
-    additivity derivation or explicitly irrelevant, with a reason.
+    """A new field OR PROPERTY on MetricPlan must be declared either an input to
+    the additivity derivation, explicitly irrelevant with a reason, or the
+    verdict itself.
 
     This is the point of the exercise. `window` was added beside `additive`
     without either knowing about the other, and the result was a level
     reported as summable — 1153, the exact figure a test pins as wrong.
     Forgetting is now a red test naming the field, not a reading someone has
-    to do."""
+    to do.
+
+    Properties are swept because THIS BRANCH made the verdict one. A census of
+    `dataclasses.fields()` alone stopped covering the shape the code uses the
+    moment `additive` became a property, and a second claim added the same way
+    was measured to leave the whole suite green. The name is unchanged because
+    the design doc cross-references it."""
     _assert_census_complete(MetricPlan, _ADDITIVITY_INPUTS, IRRELEVANT_TO_ADDITIVITY)
 
 
@@ -187,9 +232,13 @@ def test_the_census_actually_rejects_a_field_nobody_classified():
         window: str | None = None
         forgotten_field: int = 0
 
+    # `verdict=frozenset()` because this local type has no derived verdict at
+    # all; classifying two names it does not carry would trip the stale check
+    # before the failure under test could fire.
     with pytest.raises(AssertionError, match="forgotten_field"):
         _assert_census_complete(
-            PlanWithAForgottenField, frozenset({"overlap_link", "window"}), {}
+            PlanWithAForgottenField, frozenset({"overlap_link", "window"}), {},
+            verdict=frozenset(),
         )
 
     # And the two subtler failures, which a census that only counted names
@@ -200,13 +249,59 @@ def test_the_census_actually_rejects_a_field_nobody_classified():
             PlanWithAForgottenField,
             frozenset({"overlap_link", "window", "forgotten_field"}),
             {"window": "claimed in both places"},
+            verdict=frozenset(),
         )
     with pytest.raises(AssertionError, match="no longer exist"):
         _assert_census_complete(
             PlanWithAForgottenField,
             frozenset({"overlap_link", "window", "forgotten_field"}),
             {"deleted_long_ago": "a classification outliving its field"},
+            verdict=frozenset(),
         )
+
+
+def test_the_census_actually_rejects_a_property_nobody_classified():
+    """The escape this branch opened, closed and then proved closed.
+
+    Turning `additive` into a property is what made a census of
+    `dataclasses.fields()` insufficient: the claim moved out of the set the
+    census could see, and any NEXT claim added the same way — a second opinion
+    about the result, contradicting the derivation for every non-additive plan —
+    passed unnoticed. Measured on the real `MetricPlan` during review: 590
+    passed, green.
+
+    Local rather than by editing `grain.py`, for the same reason the field proof
+    above is local: a proof performed by hand and reverted is a ritual, and this
+    one runs on every suite.
+    """
+    @dataclass(frozen=True)
+    class PlanWithAnUnclassifiedClaim:
+        overlap_link: str | None = None
+
+        @property
+        def additive(self) -> bool:
+            return self.overlap_link is None
+
+        @property
+        def safe_to_total(self) -> bool:
+            return True
+
+    with pytest.raises(AssertionError, match="safe_to_total"):
+        _assert_census_complete(
+            PlanWithAnUnclassifiedClaim,
+            frozenset({"overlap_link"}),
+            {},
+            verdict=frozenset({"additive"}),
+        )
+
+    # And the classified verdict itself is accepted, so the check above is
+    # rejecting the UNCLASSIFIED claim and not merely every property.
+    _assert_census_complete(
+        PlanWithAnUnclassifiedClaim,
+        frozenset({"overlap_link"}),
+        {},
+        verdict=frozenset({"additive", "safe_to_total"}),
+    )
 
 
 def _attributes_read_off_the_argument(func):
@@ -523,7 +618,8 @@ def test_an_additive_symmetric_verdict_has_neither_fact(chinook_lite, lite_metad
 
 
 def test_every_symmetric_metric_plan_field_is_classified():
-    """The same census, over the other engine's own plan type."""
+    """The same census, over the other engine's own plan type — fields and
+    properties alike, since this engine's verdict is a property too."""
     _assert_census_complete(
         SymmetricMetricPlan, SYMMETRIC_ADDITIVITY_INPUTS, SYMMETRIC_IRRELEVANT
     )
