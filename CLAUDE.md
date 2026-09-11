@@ -11,7 +11,7 @@ Read `README.md` first for what it does. This file is about how to work on it.
 
 ```bash
 export GRAIN_DATABASE_URL="postgresql+psycopg://$(whoami)@localhost:5432/chinook"
-uv run pytest -q          # 570 passing, 0 skipped
+uv run pytest -q          # 590 passing, 0 skipped
 uv run ruff check src tests tools
 ```
 
@@ -29,9 +29,9 @@ Three outcomes, two of them misleading:
 
 | `GRAIN_DATABASE_URL` | result |
 |---|---|
-| unset | `391 passed, 179 skipped` — **green, and never touched a database** |
-| `postgresql://…` | `4 failed, 392 passed, 174 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
-| `postgresql+psycopg://…` | **570 passed** — the only form that runs the measured tests |
+| unset | `406 passed, 184 skipped` — **green, and never touched a database** |
+| `postgresql://…` | `4 failed, 407 passed, 179 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
+| `postgresql+psycopg://…` | **590 passed** — the only form that runs the measured tests |
 
 The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
@@ -155,9 +155,15 @@ the subquery engine windows to that instant before aggregating, so it sums
 across accounts and never across time. A **grouped** level is reported
 `additive: false`: the window partitions by the query's own group keys, so each
 group holds its own boundary instant and their total is a level at no instant.
-That verdict is computed beside the window rather than derived from it — the
-one known case is fixed and the general problem is the first item in
-`docs/BACKLOG.md`. dbt's MetricFlow spells the same thing
+That verdict is now **derived from the finished plan** rather than accumulated
+beside the decisions it describes: each engine stores the facts its verdict
+rests on and computes `additive` / `non_additive_reason` from them in its own
+`_additivity`, which never raises. Two guards keep the derivation honest — a
+census requiring every `MetricPlan` field to be declared an input or explicitly
+irrelevant with a reason, and an AST check asserting the derivation reads only
+classified attributes. Both engines carry their own copy; sharing one would put
+the rule in the layer the differential harness cannot see, which is how the
+defect that motivated this escaped. dbt's MetricFlow spells the same thing
 `non_additive_dimension`; the vocabulary here is `first|last` rather than
 `min|max` because `window_choice: max` reads as the largest VALUE when it means
 the value at the latest DATE.
