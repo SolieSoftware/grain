@@ -576,9 +576,12 @@ computed. Both nets check the value. Neither checks the claim attached to it.
 **What it cost.** Nothing at runtime, because it was found in review — but it is
 the third defect of this exact shape on this project (C1, C5), and the first two
 were also found by a person reading the code rather than by a test. The fix is
-ten lines; the class of defect is now the first item in `docs/BACKLOG.md`,
-because the window and the verdict are still written beside each other rather
-than one being derived from the other.
+ten lines. The class of defect became the backlog's first item, because the
+window and the verdict were still written beside each other rather than one
+being derived from the other; that is now done —
+`docs/plans/2026-09-06-derived-additivity-design.md`, implemented 2026-09-11 —
+and the item has left the backlog. What the derivation does NOT close is which
+facts `analyse` gathers in the first place, which is the backlog's new item 1.
 
 **Transferable:** a result carries values AND claims about those values, and a
 test that only compares values validates half of it. Where a flag licenses the

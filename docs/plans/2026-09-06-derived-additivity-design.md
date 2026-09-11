@@ -1,12 +1,19 @@
 # Derive a Plan's Claims From the Plan — Design
 
-**Status:** design 2026-09-06, not yet implemented.
+**Status:** implemented 2026-09-11. See
+`docs/plans/2026-09-06-derived-additivity-plan.md`. Both engines derive their own
+verdict, each from its own facts; §5's no-behaviour-change constraint held, and
+was measured rather than assumed — 4912 enumerated shapes, identical verdicts,
+reason strings, strategies and refusals.
 
 **Goal:** Make a `MetricPlan`'s claims about its result — `additive`,
 `non_additive_reason` — a function of the finished plan, so that a decision and
 the claim describing it cannot part company.
 
-**Backlog:** item 1 in `docs/BACKLOG.md`.
+**Backlog:** this item has LEFT `docs/BACKLOG.md`, per that file's own rule — an
+item leaves when a design doc exists for it. The backlog's item 1 is now the
+`many_to_one`-in-prefix hole: a wider instance of the same class, pre-existing,
+and not closed by this work.
 
 ---
 

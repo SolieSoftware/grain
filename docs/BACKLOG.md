@@ -9,48 +9,78 @@ Sources: `docs/QUANTITY-TYPES.md` (summarizability and units-of-measure),
 
 ---
 
-## 1. Derive a plan's claims from the plan
+## 1. A `many_to_one` edge in a metric's prefix is not tested for
 
-`analyse()` computes a metric's WINDOW and its ADDITIVITY VERDICT in the same
-loop and independently of each other. Nothing structurally stops them
-disagreeing, and they did: the additivity loop asks only "do the groups
-overlap?", a stock's do not, so a windowed stock was reported `additive: true`
-while `_window_to_boundary` was collapsing each group to its OWN boundary
-instant. Every group was correct and their total was a level at no instant —
-1153 by `as_of`, which is exactly the across-time sum the branch exists to
-prevent, computed by grain and labelled summable.
+Both engines decide whether a metric's groups overlap by walking the metric's
+own prefix and asking one question of each edge:
+`effective_cardinality == "many_to_many"`. That question is too narrow. A
+**`many_to_one`** hop means the grain rows are the *parents*: one grain row is
+reachable from many root rows, so it lands in several groups at once and the
+column cannot sum to the total. Same defect, same mechanism, different
+cardinality — and nothing anywhere tests for it.
 
-That one case is fixed. The general problem is not: a `MetricPlan` carries
-claims ABOUT its result (`additive`, `non_additive_reason`) that are written
-beside the decisions they describe rather than derived from them. Any future
-strategy, window or rewrite can add a way for the number and the claim about it
-to part company, and the next instance will be found the same way — by a person
-reading both halves and noticing.
+The result is the exact shape the derived-additivity work exists to prevent: a
+correct per-group figure carrying a **false claim** about itself, delivered to an
+agent that `agent/prompt.py` instructs to trust the claim. `additive: true` is
+precisely the licence to total the column, and `agent/tools.py::_caveats` stays
+silent.
 
-**Neither standing safety net can see this class of defect**, which is what
-makes it worth its own item rather than a note. The differential harness needs
-two engines to disagree, and a claim made in the plan layer is not SQL —
-worse, the symmetric engine refuses a stock outright, so there is no second
-answer at all. `tools/oracle.py` answers the same per-group question and agrees
-per group; it has no opinion about a total nobody computed. This is the third
-Critical of this shape (C1: 5738.28 as one unlabelled figure; C5: 6 for a truth
-of 3, reported additive) and the first two were also found by review, not by a
-test.
+**Measured, both engines, no caveat emitted:**
 
-**The shape of a fix.** Make the verdict a function of the finished plan rather
-than a variable accumulated alongside it — `additive(metric_plan)` reading
-`strategy`, `window`, `prefix` and `group_by`, so a new field that affects
-summability has one place it must be handled and a missing case is an
-unhandled branch rather than a silent `True`. Prior art is thin: MetricFlow and
-Cube both attach additivity to a metric DEFINITION, not to a query result, so
-neither has this problem or its solution. `docs/QUANTITY-TYPES.md`'s
-summarizability conditions are the closest thing — they are conditions on a
-(measure, dimension, aggregate) triple, which is nearer to a derivation than a
-flag.
+- `Customer --Customer_SupportRep--> Employee`, `employee_count` grouped by
+  `email`. Reported `additive: true`; 59 groups of 1, totalling **59**. The true
+  headcount is **3** — `select count(distinct support_rep_id) from customer`.
+- `Track --Track_Album--> Album --Album_Tracks--> Track --Track_InvoiceLines-->
+  InvoiceLine`, `revenue` grouped by `composer`. Reported `additive: true`; 826
+  groups, totalling **35368.77** (subquery) and **9346.71** (symmetric), against
+  the **2328.60** anchor.
 
-**Cost of skipping:** every wrong number this system can still produce goes out
-with a correct figure attached to a false claim about it, and the caller is an
-agent that was told to trust the claim.
+`Customer_SupportRep` and `Track_Album` are the `many_to_one` hops.
+
+**PRE-EXISTING, not introduced by the derived-additivity branch.** Both repros
+are byte-identical at `9014e49`. The restructuring made the verdict a function of
+the plan; it did not change which facts the plan records, and this hole is in the
+fact-gathering.
+
+**Neither standing safety net can see it**, which is why it is first rather than
+a note. The differential harness needs the two engines to *disagree*, and here
+they share the gap — the `many_to_many`-only test is duplicated into
+`engine_symmetric/grain.py` along with everything else, so both report
+`additive: true` and agree. `tools/oracle.py` answers the same per-group question
+and **agrees per group**, correctly: every group IS right. It is the total that is
+wrong, and no per-group cross-check has an opinion about a total nobody computed.
+That is the third time this pairing has been blind to the same class of defect
+(C1, C5, and the windowed level).
+
+**Related and not the same: the empty-prefix hole.** A metric measured at the
+root has no prefix at all, which `engine/grain.py` already records beside
+`_ADDITIVITY_INPUTS` and which `KeyBeyondGrain` catches by accident. Fixing that
+one — following the path to the GROUP KEY, as
+`engine_symmetric/grain.py::_overlap` already does — **would not close this one**:
+both measured cases have a non-empty prefix and are grouped by a bare root key,
+so `_overlap` skips them (`edge_index is None`). Two holes, one location.
+
+**Prior art is thin, and that is informative.** MetricFlow and Cube attach
+additivity to a metric *definition*, so neither asks this question of a traversal
+at all. `docs/QUANTITY-TYPES.md`'s summarizability conditions are the closest
+thing: they are conditions on a (measure, dimension, aggregate) triple, and
+**disjointness** — does each grain row belong to exactly one group? — is the
+condition being got wrong here, named and stated there. Read §3 before designing.
+
+**Also in scope for the same design, because it is the same conflation:**
+`median_duration` and `p90_duration` grouped by any dimension report
+`additive: true` (ungrouped `255634` against a per-genre sum of `16715217`).
+grain's `additive` means "the groups partition the rows" and is read as "this
+quantity sums"; an order statistic never sums, however the rows are partitioned.
+That is §3's **type compatibility** condition, on the aggregate rather than the
+dimension, and grain has no equivalent of it. Pre-existing and identical on
+`main`.
+
+**Cost of skipping:** grain's single rule is that a wrong number is worse than no
+answer. This is worse than either — a right number with a wrong licence attached,
+where the caller doing the arithmetic is an agent, in a process no harness is
+watching. Every other item on this list is a capability; this one is a defect
+that ships wrong totals today.
 
 ## 2. A usable time dimension
 

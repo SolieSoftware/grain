@@ -11,7 +11,7 @@ Read `README.md` first for what it does. This file is about how to work on it.
 
 ```bash
 export GRAIN_DATABASE_URL="postgresql+psycopg://$(whoami)@localhost:5432/chinook"
-uv run pytest -q          # 590 passing, 0 skipped
+uv run pytest -q          # 593 passing, 0 skipped
 uv run ruff check src tests tools
 ```
 
@@ -29,9 +29,9 @@ Three outcomes, two of them misleading:
 
 | `GRAIN_DATABASE_URL` | result |
 |---|---|
-| unset | `406 passed, 184 skipped` — **green, and never touched a database** |
-| `postgresql://…` | `4 failed, 407 passed, 179 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
-| `postgresql+psycopg://…` | **590 passed** — the only form that runs the measured tests |
+| unset | `414 passed, 179 skipped` — **green, and never touched a database** |
+| `postgresql://…` | `4 failed, 415 passed, 174 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
+| `postgresql+psycopg://…` | **593 passed** — the only form that runs the measured tests |
 
 The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
@@ -159,11 +159,22 @@ That verdict is now **derived from the finished plan** rather than accumulated
 beside the decisions it describes: each engine stores the facts its verdict
 rests on and computes `additive` / `non_additive_reason` from them in its own
 `_additivity`, which never raises. Two guards keep the derivation honest — a
-census requiring every `MetricPlan` field to be declared an input or explicitly
-irrelevant with a reason, and an AST check asserting the derivation reads only
-classified attributes. Both engines carry their own copy; sharing one would put
+census requiring every `MetricPlan` **field or property** to be declared an
+input, explicitly irrelevant with a reason, or the verdict itself, and an AST
+check asserting the derivation reads only classified attributes. Properties are
+swept because making the verdict one is precisely what would otherwise let the
+next claim in unseen. Both engines carry their own copy; sharing one would put
 the rule in the layer the differential harness cannot see, which is how the
-defect that motivated this escaped. dbt's MetricFlow spells the same thing
+defect that motivated this escaped.
+
+**A derivation cannot fix which facts it is handed.** Both engines test a
+metric's prefix for `many_to_many` only, so a **`many_to_one`** prefix edge —
+grain rows that are shared *parents* — reports `additive: true` for a column
+that cannot sum to the total: `employee_count` over `Customer_SupportRep`
+grouped by a customer property gives 59 groups of 1 against a true 3.
+Pre-existing, and in both engines, so the differential harness agrees and the
+oracle agrees per group. It is item 1 of `docs/BACKLOG.md`, and the highest-value
+known defect. dbt's MetricFlow spells the same thing
 `non_additive_dimension`; the vocabulary here is `first|last` rather than
 `min|max` because `window_choice: max` reads as the largest VALUE when it means
 the value at the latest DATE.
