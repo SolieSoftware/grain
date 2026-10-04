@@ -590,3 +590,39 @@ wrong flags produce wrong numbers in someone else's process where no harness is
 looking. Ask, of every claim a system publishes about its own output: what
 computes this, and is it derived from the thing it describes, or merely written
 next to it.
+
+### A guard that enumerates shapes is a guard against the shapes you thought of
+
+**Believed:** the census over `MetricPlan` — every member must be declared an
+additivity input, explicitly irrelevant with a reason, or the verdict itself —
+closed the hole that derived additivity opened. It had already been widened
+once, from `dataclasses.fields()` to fields plus `isinstance(v, property)`,
+because this branch turned `additive` and `non_additive_reason` into properties
+and thereby put the claim outside the set the census could see.
+
+**True:** two more shapes walked straight past it, both measured on the real
+`MetricPlan` at 593 passed / 0 skipped. A `ClassVar[bool] = True` is neither a
+dataclass field nor a class-level descriptor. A `functools.cached_property`
+returning `True` is not a `property`, and — the part that makes it a live risk
+rather than a curiosity — it works perfectly on a frozen dataclass, because it
+writes through the instance `__dict__` where `__setattr__` is never consulted.
+It is also the obvious optimisation to reach for here: `additive` and
+`non_additive_reason` each call `_additivity`, so every plan derives its verdict
+twice. Someone caching that would have removed the guard and seen a green suite.
+
+**What it cost.** Nothing at runtime; found by probing the guard rather than by
+trusting it. The fix inverts the walk — every PUBLIC NAME on the class, whatever
+its shape, instead of a list of shapes to look for — which also picks up a bare
+class constant, a `__slots__` entry and a method, none of which anyone had
+enumerated either. What remains is stated in the collector's docstring and run
+as a test: a metaclass attribute, a metaclass `__getattr__`, an instance
+attribute set in `__post_init__`, a leading-underscore name.
+
+**Transferable:** a guard written as a list of the forms it recognises fails
+silently every time the language offers a form the author did not list, and the
+author's own suite stays green because the suite is testing the forms they
+thought of too. Prefer a deny-list over an allow-list for the SHAPES a check
+inspects — enumerate what is exempt, not what is caught — and when you cannot,
+write the residual gaps into the check's docstring AND into a test that runs
+them, because a documented gap nothing exercises decays into a documented gap
+that is no longer the real one.

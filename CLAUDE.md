@@ -11,7 +11,7 @@ Read `README.md` first for what it does. This file is about how to work on it.
 
 ```bash
 export GRAIN_DATABASE_URL="postgresql+psycopg://$(whoami)@localhost:5432/chinook"
-uv run pytest -q          # 593 passing, 0 skipped
+uv run pytest -q          # 596 passing, 0 skipped
 uv run ruff check src tests tools
 ```
 
@@ -29,9 +29,9 @@ Three outcomes, two of them misleading:
 
 | `GRAIN_DATABASE_URL` | result |
 |---|---|
-| unset | `414 passed, 179 skipped` — **green, and never touched a database** |
-| `postgresql://…` | `4 failed, 415 passed, 174 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
-| `postgresql+psycopg://…` | **593 passed** — the only form that runs the measured tests |
+| unset | `417 passed, 179 skipped` — **green, and never touched a database** |
+| `postgresql://…` | `4 failed, 418 passed, 174 errors` — SQLAlchemy reaches for psycopg2, not a dependency |
+| `postgresql+psycopg://…` | **596 passed** — the only form that runs the measured tests |
 
 The unset case is the trap. Most regression tests here assert *measured values*
 against chinook; skipped, they assert nothing. **Check the skip count, not the
@@ -159,13 +159,26 @@ That verdict is now **derived from the finished plan** rather than accumulated
 beside the decisions it describes: each engine stores the facts its verdict
 rests on and computes `additive` / `non_additive_reason` from them in its own
 `_additivity`, which never raises. Two guards keep the derivation honest — a
-census requiring every `MetricPlan` **field or property** to be declared an
+census requiring every **public member** of `MetricPlan` to be declared an
 input, explicitly irrelevant with a reason, or the verdict itself, and an AST
-check asserting the derivation reads only classified attributes. Properties are
-swept because making the verdict one is precisely what would otherwise let the
-next claim in unseen. Both engines carry their own copy; sharing one would put
-the rule in the layer the differential harness cannot see, which is how the
-defect that motivated this escaped.
+check asserting the derivation reads only classified attributes. Both engines
+carry their own copy; sharing one would put the rule in the layer the
+differential harness cannot see, which is how the defect that motivated this
+escaped.
+
+**The census walks by exclusion, because enumerating shapes failed twice.** It
+read `dataclasses.fields()` until the verdict became a property; widened to
+`isinstance(v, property)`, it still missed a `ClassVar` and a
+`functools.cached_property` — both measured green on the real `MetricPlan`, and
+the second is the optimisation someone would actually reach for, since the two
+verdict properties call `_additivity` twice per plan. So it now takes every
+public name on the class whatever its shape, plus the fields, plus unvalued
+`ClassVar` annotations. What still escapes is stated in
+`_claim_bearing_names`'s docstring and run by
+`test_the_measured_census_escape_forms_are_the_ones_recorded`: a metaclass
+attribute, a metaclass `__getattr__`, an undeclared instance attribute set in
+`__post_init__`, and a leading-underscore name. The first three are survivable
+only while no plan type uses them, which is asserted rather than hoped.
 
 **A derivation cannot fix which facts it is handed.** Both engines test a
 metric's prefix for `many_to_many` only, so a **`many_to_one`** prefix edge —

@@ -30,9 +30,11 @@ every object, link and metric these need and loads from `lite_metadata`, so the
 claims below hold in both configurations.
 """
 import ast
+import functools
 import inspect
 import textwrap
 from dataclasses import dataclass, fields
+from typing import ClassVar, get_origin, get_type_hints
 
 import pytest
 
@@ -174,21 +176,68 @@ THE_VERDICT = frozenset({"additive", "non_additive_reason"})
 def _claim_bearing_names(plan_type):
     """Every name on `plan_type` that can carry a claim about the result.
 
-    FIELDS AND PROPERTIES, not fields alone. A derived verdict is a property, so
-    a census counting only fields would be blind to exactly the shape this
-    branch introduced — measured, not supposed: adding `safe_to_total` as a
-    property left all 590 tests green.
+    EVERY PUBLIC MEMBER, not fields alone and not fields plus `property` alone.
+    A derived verdict is a property, so a census counting only fields would be
+    blind to exactly the shape this branch introduced — measured, not supposed:
+    adding `safe_to_total` as a property left all 590 tests green. Widening it
+    to `isinstance(v, property)` closed that one shape and left two others open,
+    BOTH MEASURED on the real `MetricPlan` in this worktree, both green at
+    593/0:
 
-    `getattr` on the CLASS is what distinguishes the two: a field with a default
-    returns the default, a property returns the descriptor itself. Methods are
-    not properties and are deliberately not swept in — a method is code, and the
-    AST check is what reads code.
+        SAFE_TO_TOTAL_CLASSVAR: ClassVar[bool] = True
+
+        @functools.cached_property
+        def safe_to_total_cached(self) -> bool: return True
+
+    Neither is self-defeating. `functools.cached_property` works on a frozen
+    dataclass — it writes through the instance `__dict__`, which `__setattr__`
+    never sees — and it is the OBVIOUS optimisation here, because the two
+    verdict properties call `_additivity` twice per plan. Reaching for it would
+    have silently removed the guard. A `ClassVar` simply reads. `isinstance(v,
+    property)` is False for a `cached_property`, and a `ClassVar` is neither a
+    field nor a class-level descriptor, so the old walk saw neither.
+
+    So the walk is now by EXCLUSION rather than by enumerating descriptor types:
+    every public name on the class, whatever shape it has, plus the fields
+    (which include ones with no class-level default) plus `ClassVar`
+    annotations carrying no value. Enumerating the shapes is what failed twice;
+    `property`, `cached_property`, any other `__get__`, a bare class constant
+    and a `__slots__` entry are all covered by not asking what shape a name is.
+    Methods ARE now swept in, reversing the note this docstring used to carry:
+    the AST check reads `_additivity` and nothing else, so it was never the
+    thing covering a claim written as `def safe_to_total(self)`.
+
+    KNOWN ESCAPE FORMS, measured rather than reasoned about, and pinned by
+    `test_the_measured_census_escape_forms_are_the_ones_recorded`:
+
+    - a property on a custom METACLASS — ESCAPES. `type.__dir__` merges the
+      class's own MRO only, so a metaclass's attributes are not listed and
+      nothing here looks at `type(plan_type)`.
+    - `__getattr__` on that metaclass, synthesising the name on access —
+      ESCAPES, and cannot not: there is no static name to find.
+    - an attribute set in `__post_init__` via `object.__setattr__` and never
+      declared — ESCAPES. It is on the INSTANCE; this walk reads the class.
+    - a leading-underscore name, `_safe_to_total` — ESCAPES, deliberately. The
+      filter is what keeps the dunders out, and a private name is not the claim
+      a caller reads.
+
+    All four are stated for the reason the AST check's escapes are: a known gap
+    stated is a gap, and a known gap unstated is the exact defect — a claim and
+    the code under it parting company — this file exists to close. Closing the
+    first three would mean reading `type(plan_type)` and giving up on static
+    inspection entirely; the cheap defence is that a plan type here is a plain
+    frozen dataclass with no metaclass, which `test_the_plan_types_are_the_shape
+    _the_census_can_see` asserts rather than assumes.
     """
-    return {f.name for f in fields(plan_type)} | {
+    names = {f.name for f in fields(plan_type)}
+    names |= {name for name in dir(plan_type) if not name.startswith("_")}
+    names |= {
         name
-        for name in dir(plan_type)
-        if isinstance(getattr(plan_type, name, None), property)
+        for name, hint in get_type_hints(plan_type).items()
+        if not name.startswith("_")
+        and (hint is ClassVar or get_origin(hint) is ClassVar)
     }
+    return names
 
 
 def _assert_census_complete(plan_type, inputs, irrelevant, verdict=THE_VERDICT):
@@ -321,6 +370,152 @@ def test_the_census_actually_rejects_a_property_nobody_classified():
         {},
         verdict=frozenset({"additive", "safe_to_total"}),
     )
+
+
+def test_the_census_rejects_the_two_shapes_a_property_walk_missed():
+    """The second escape, and the reason the walk stopped enumerating shapes.
+
+    `isinstance(v, property)` closed the shape THIS branch introduced and left
+    two open that were measured on the real `MetricPlan` in this worktree: a
+    `ClassVar`, which is neither a field nor a class-level descriptor, and a
+    `functools.cached_property`, for which `isinstance(v, property)` is False.
+    Both left the suite at 593 passed, 0 skipped.
+
+    `cached_property` is the one that matters. It is not a hypothetical shape
+    someone might contrive — `additive` and `non_additive_reason` each call
+    `_additivity`, so the plan computes its verdict twice per read and caching
+    is the obvious thing to reach for. It works on a frozen dataclass (it writes
+    through the instance `__dict__`, so `__setattr__` is never consulted), which
+    means reaching for it would have removed the guard and said nothing.
+
+    Local for the reason the two proofs above are local: a proof performed by
+    hand on `grain.py` and reverted is a ritual, and this one runs every suite.
+    """
+    @dataclass(frozen=True)
+    class PlanWithTheTwoEscapes:
+        overlap_link: str | None = None
+
+        SAFE_TO_TOTAL_CLASSVAR: ClassVar[bool] = True
+        # A ClassVar with no value at all — invisible to `dir`, which is why
+        # the annotations are read as well as the class.
+        SAFE_TO_TOTAL_UNVALUED: ClassVar[bool]
+
+        @property
+        def additive(self) -> bool:
+            return self.overlap_link is None
+
+        @functools.cached_property
+        def safe_to_total_cached(self) -> bool:
+            return True
+
+    for escaped in (
+        "SAFE_TO_TOTAL_CLASSVAR", "SAFE_TO_TOTAL_UNVALUED", "safe_to_total_cached",
+    ):
+        with pytest.raises(AssertionError, match=escaped):
+            _assert_census_complete(
+                PlanWithTheTwoEscapes,
+                frozenset({"overlap_link"}),
+                {},
+                verdict=frozenset({"additive"}),
+            )
+
+    # And classified, the census passes — so the check above is rejecting the
+    # unclassified claim rather than every member of a shape it cannot name.
+    _assert_census_complete(
+        PlanWithTheTwoEscapes,
+        frozenset({"overlap_link"}),
+        {},
+        verdict=frozenset({
+            "additive", "SAFE_TO_TOTAL_CLASSVAR", "SAFE_TO_TOTAL_UNVALUED",
+            "safe_to_total_cached",
+        }),
+    )
+
+    # `cached_property` really does work on a frozen dataclass, which is the
+    # whole reason it is a live risk rather than a contrived one. Asserted, not
+    # assumed: if it ever raised, the shape would be self-defeating and this
+    # test would be guarding against nothing.
+    assert PlanWithTheTwoEscapes().safe_to_total_cached is True
+
+
+def test_the_measured_census_escape_forms_are_the_ones_recorded():
+    """`_claim_bearing_names`'s documented escapes, run rather than asserted in
+    prose — the same treatment `test_the_measured_escape_forms_are_the_ones_
+    recorded` gives the AST check's. A documented gap nothing exercises decays
+    into a documented gap that is no longer the real one.
+    """
+    class Meta(type):
+        @property
+        def meta_claim(cls) -> bool:
+            return True
+
+        def __getattr__(cls, name):
+            return True
+
+    @dataclass(frozen=True)
+    class PlanBehindAMetaclass(metaclass=Meta):
+        overlap_link: str | None = None
+
+    names = _claim_bearing_names(PlanBehindAMetaclass)
+    # `type.__dir__` merges the class's own MRO only.
+    assert "meta_claim" not in names
+    assert PlanBehindAMetaclass.meta_claim is True
+    # And the dynamic form, which no static walk can see.
+    assert "synthesised_claim" not in names
+    assert PlanBehindAMetaclass.synthesised_claim is True
+
+    @dataclass(frozen=True)
+    class PlanWithAnInstanceAttribute:
+        overlap_link: str | None = None
+
+        def __post_init__(self):
+            object.__setattr__(self, "safe_to_total_instance", True)
+
+        @property
+        def _safe_to_total_private(self) -> bool:
+            return True
+
+    names = _claim_bearing_names(PlanWithAnInstanceAttribute)
+    assert "safe_to_total_instance" not in names
+    assert PlanWithAnInstanceAttribute().safe_to_total_instance is True
+    assert "_safe_to_total_private" not in names
+
+    # The other side of the line, and the point of walking by exclusion: shapes
+    # nobody enumerated are caught anyway. A bare class constant carries a claim
+    # just as a `ClassVar` does, and a `__slots__` entry is a descriptor whose
+    # type nothing here names.
+    @dataclass(frozen=True)
+    class PlanWithUnenumeratedShapes:
+        __slots__ = ("overlap_link", "safe_to_total_slot")
+        overlap_link: str | None
+
+    assert "safe_to_total_slot" in _claim_bearing_names(PlanWithUnenumeratedShapes)
+
+    @dataclass(frozen=True)
+    class PlanWithABareConstant:
+        overlap_link: str | None = None
+        SAFE_TO_TOTAL_BARE = True
+
+    assert "SAFE_TO_TOTAL_BARE" in _claim_bearing_names(PlanWithABareConstant)
+
+
+def test_the_plan_types_are_the_shape_the_census_can_see():
+    """The three escapes above are survivable only while no plan type uses them.
+
+    Stated as an assertion rather than a hope: both engines' `MetricPlan` must
+    stay a plain class with no custom metaclass and no `__getattr__`, because a
+    census that cannot see those shapes is a census of the shape the code used
+    to have — which is exactly how this guard failed twice already.
+    """
+    for plan_type in (MetricPlan, SymmetricMetricPlan):
+        assert type(plan_type) is type, (
+            f"{plan_type.__module__}.MetricPlan has a custom metaclass; its "
+            f"attributes are invisible to the census"
+        )
+        assert "__getattr__" not in vars(plan_type), (
+            f"{plan_type.__module__}.MetricPlan synthesises attributes "
+            f"dynamically; the census cannot enumerate them"
+        )
 
 
 def _attributes_read_off_the_argument(func):
