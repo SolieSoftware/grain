@@ -186,7 +186,8 @@ grain rows that are shared *parents* — reports `additive: true` for a column
 that cannot sum to the total: `employee_count` over `Customer_SupportRep`
 grouped by a customer property gives 59 groups of 1 against a true 3.
 Pre-existing, and in both engines, so the differential harness agrees and the
-oracle agrees per group. It is item 1 of `docs/BACKLOG.md`, and the highest-value
+oracle agrees per group. It is `docs/BACKLOG.md`'s
+"A `many_to_one` edge in a metric's prefix is not tested for", and the highest-value
 known defect. dbt's MetricFlow spells the same thing
 `non_additive_dimension`; the vocabulary here is `first|last` rather than
 `min|max` because `window_choice: max` reads as the largest VALUE when it means

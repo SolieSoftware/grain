@@ -253,7 +253,7 @@ def _assert_census_complete(plan_type, inputs, irrelevant, verdict=THE_VERDICT):
     classified = inputs | set(irrelevant) | set(verdict)
     unclassified = names - classified
     assert not unclassified, (
-        f"MetricPlan fields or properties not classified for additivity: "
+        f"MetricPlan members not classified for additivity: "
         f"{sorted(unclassified)}. Add each to _ADDITIVITY_INPUTS, or to "
         f"IRRELEVANT_TO_ADDITIVITY with a one-line reason it cannot affect "
         f"whether the column sums to the total — or, if it is itself a claim "
@@ -268,7 +268,8 @@ def _assert_census_complete(plan_type, inputs, irrelevant, verdict=THE_VERDICT):
 
 
 def test_every_metric_plan_field_is_classified():
-    """A new field OR PROPERTY on MetricPlan must be declared either an input to
+    """A new PUBLIC MEMBER of MetricPlan, whatever its shape, must be declared
+    either an input to
     the additivity derivation, explicitly irrelevant with a reason, or the
     verdict itself.
 

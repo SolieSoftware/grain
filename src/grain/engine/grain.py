@@ -133,7 +133,8 @@ class MetricPlan:
 #    --Album_Tracks--> Track --Track_InvoiceLines--> InvoiceLine`, `revenue` by
 #    `composer`, sums to 35368.77 (subquery) / 9346.71 (symmetric) against the
 #    2328.60 anchor. PRE-EXISTING — byte-identical at 9014e49, not introduced by
-#    the restructuring that produced this comment. Item 1 of docs/BACKLOG.md.
+#    the restructuring that produced this comment. See docs/BACKLOG.md's
+#    "A `many_to_one` edge in a metric's prefix is not tested for".
 #
 # Both are deliberately out of scope of that restructuring: they are semantic
 # changes, and mixing one in would make a behavioural difference impossible to

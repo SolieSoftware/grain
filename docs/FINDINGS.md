@@ -581,7 +581,8 @@ window and the verdict were still written beside each other rather than one
 being derived from the other; that is now done —
 `docs/plans/2026-09-06-derived-additivity-design.md`, implemented 2026-09-11 —
 and the item has left the backlog. What the derivation does NOT close is which
-facts `analyse` gathers in the first place, which is the backlog's new item 1.
+facts `analyse` gathers in the first place, which is the backlog's
+"A `many_to_one` edge in a metric's prefix is not tested for".
 
 **Transferable:** a result carries values AND claims about those values, and a
 test that only compares values validates half of it. Where a flag licenses the

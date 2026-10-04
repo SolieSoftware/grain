@@ -110,7 +110,8 @@ class MetricPlan:
 # undetected, in BOTH engines, which is exactly why the differential harness
 # cannot see it. Measured figures, and why neither standing safety net catches
 # it, are in `engine/grain.py` beside its own `_ADDITIVITY_INPUTS`; the work is
-# item 1 of docs/BACKLOG.md. Pre-existing, not introduced with this derivation.
+# docs/BACKLOG.md's "A `many_to_one` edge in a metric's prefix is not tested for".
+# Pre-existing, not introduced with this derivation.
 _ADDITIVITY_INPUTS = frozenset({"prefix_overlap", "group_key_overlap", "metric"})
 
 # Fields that provably cannot change the verdict, each with the reason. The
